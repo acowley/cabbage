@@ -295,9 +295,9 @@ echo "$RES"
  
 # Takes two constraint files, downstream and upstream
 updateConstraintsAwk() {
-  {(isolateConstraints | cleanupConstraints) < "$1"; \
-   echo "***"; \
-   (isolateConstraints | cleanupConstraints) < "$2";} \
+  { (isolateConstraints | cleanupConstraints) < "$1"; \
+    echo "***"; \
+    (isolateConstraints | cleanupConstraints) < "$2"; } \
   | awkConstraintIntersection
 }
 #+END_SRC
@@ -621,19 +621,19 @@ cabal get $1 -d .cabbages
 
 # Get the package in this directory's full versioned name
 getMyFullName() {
-  cabal info *.cabal | head -n 1 | sed 's/* \([^[:space:]]*\).*/\1/'
+  cabal info ./*.cabal | head -n 1 | sed 's/* \([^[:space:]]*\).*/\1/'
 }
 
 # Takes a directory name, and returns the package that can be built
 # from that directory.
 getAddedPackageName() {
-  (cd $1 && getMyFullName)
+  (cd "$1" && getMyFullName)
 }
 
 # Get a source distribution of an added-source package
 getAddSource() {
   local CWD=$(pwd)
-  (cd $1 && cabal sdist --verbose=0 --output-directory="$CWD"/.cabbages/$(getMyFullName))
+  (cd "$1" && cabal sdist -v0 --output-directory="$CWD"/.cabbages/"$(getMyFullName)")
 }
 #+END_SRC
 
@@ -657,7 +657,7 @@ Adapted from [[http://stackoverflow.com/questions/3685970/check-if-an-array-cont
 findIndex() {
   local i
   declare -a arr=("${!2}")
-  for i in ${!arr[@]}; do 
+  for i in "${!arr[@]}"; do 
     [[ "${arr[$i]}" == "$1" ]] && echo $i && return 0; done
   echo "-1"
   return 1
@@ -689,7 +689,7 @@ LISTEDSOURCES="$(cd CabbageDown && cabal sandbox list-sources))"
 ADDEDSOURCEDIRS=($(getAddedSources "$LISTEDSOURCES"))
 
 # We want the package name of each added source.
-for i in ${!ADDEDSOURCEDIRS[@]}; do
+for i in "${!ADDEDSOURCEDIRS[@]}"; do
   ADDEDSOURCES[$i]=$(getAddedPackageName "${ADDEDSOURCEDIRS[$i]}")
 done
 echo "${ADDEDSOURCES[*]}"
@@ -712,14 +712,15 @@ available from hackage via =cabal get=.
 getDependencySources() {
   local LISTEDSOURCES="$(cabal sandbox list-sources))"
   local ADDEDSOURCEDIRS=($(getAddedSources "$LISTEDSOURCES"))
+  local ADDEDSOURCEPACKAGES
   local i
-  for i in ${!ADDEDSOURCEDIRS[@]}; do
+  for i in "${!ADDEDSOURCEDIRS[@]}"; do
     ADDEDSOURCEPACKAGES[$i]=$(getAddedPackageName "${ADDEDSOURCEDIRS[$i]}")
   done
   local DEPS=($(getUninstalledDependencies cabal.config))
   mkdir -p .cabbages
   local d
-  for d in ${DEPS[@]}; do
+  for d in "${DEPS[@]}"; do
     i=$(findIndex "$d" ADDEDSOURCEPACKAGES[@])
     if [ "$i" -gt "-1" ]; then
       echo "Getting add-source dependency: $d"
@@ -769,7 +770,7 @@ database.
 #+BEGIN_SRC sh :tangle cabbage :exports code
 getPackageDBPath() {
   if [ -f cabal.sandbox.config ]; then
-    echo $(cabal sandbox hc-pkg list | grep ".conf.d" | tail -n 1 | sed 's/.*\/\(.*\)-packages.conf.d.*/\1/')
+    cabal sandbox hc-pkg list | grep ".conf.d" | tail -n 1 | sed 's/.*\/\(.*\)-packages.conf.d.*/\1/'
     return 0
   else
     return 1
@@ -900,7 +901,7 @@ mkCabbage() {
   local i
   for ((i=0; i < ${#DEPS[@]}; ++i)); do
     # Remove version number from dependency name
-    DEPNAMES[$i]=$(echo "${DEPS[$i]}" | sed 's/\(.*\)-[[:digit:]].*/\1/')
+    DEPNAMES[$i]=$(sed 's/\(.*\)-[[:digit:]].*/\1/' <<< "${DEPS[$i]}")
   done
 
   if [ "$3" = true ]; then
@@ -920,14 +921,14 @@ EOF
     # We will seed the sandbox /in this directory/ with our
     # dependencies in the nix store so the user can continue using a
     # standard cabal workflow (e.g. tools like ghc-mod).
-    mkdir -p .cabal-sandbox/lib/$1
+    mkdir -p .cabal-sandbox/lib/"$1"
     LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/ && \${cabalTmp} sandbox hc-pkg recache";
   else
     # This is an upstream package (dependency)
     FROZENUPSTREAM="frozenCabbages"
   fi
 
-  local SYNOPSIS=$(cabal info *.cabal \
+  local SYNOPSIS=$(cabal info ./*.cabal \
                    | grep "Synopsis:" \
                    | sed 's/[[:space:]]*Synopsis:[[:space:]]*\(.*\)/\1/')
 
@@ -945,12 +946,12 @@ let cabalTmp = "cabal --config-file=./.cabal/config";
                     '';
     mkSetupCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
                           p = pkg.outPath;
-                      in "$(echo $LINKSANDBOX)\n";
+                      in "$LINKSANDBOX\n";
 in
 (lib.makeOverridable stdenv.mkDerivation rec {
   name = "haskell-$2";
   src = ./.;
-  cabbageDeps = with frozenCabbages; [ $(echo ${DEPNAMES[@]}) ];
+  cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
   buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps;
 
   # Build the commands to merge package databases
@@ -1013,7 +1014,7 @@ mkCabbages() {
   local deps=($(getDependencies cabal.config))
   getDependencySources
   pushd .cabbages > /dev/null
-  for d in ${deps[@]}; do
+  for d in "${deps[@]}"; do
     if ! globallyInstalled $d; then
       echo "Making cabbage: $d"
       (cd "$d" && prepCabbage)
@@ -1021,7 +1022,7 @@ mkCabbages() {
   done
   popd > /dev/null
   
-  mkCabbage "$dbPath" $(getMyFullName) true
+  mkCabbage "$dbPath" "$(getMyFullName)" true
 }
 #+END_SRC
 
