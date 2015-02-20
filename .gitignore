@@ -1,0 +1,8 @@
+/CabbageDown/.cabal/
+/TestCabbage/cabal.sandbox.config
+/TestCabbage/dist/
+/CabbageDown/.cabal-sandbox/
+/CabbageDown/cabal.sandbox.config
+CabbageDown/default.nix
+CabbageDown/shell.nix
+TestCabbage/default.nix

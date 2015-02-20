@@ -1,0 +1,466 @@
+#!/usr/bin/env bash
+
+# List directories of added sources
+getAddedSources() {
+  echo "$1" | sed '1,/^$/ d' | sed '/^$/,$ d'
+}
+
+# Takes two sets of constraints separates by a line containing only
+# "***" and returns the second set of package names with versions
+# drawn from the first set.
+awkConstraintIntersection() {
+  read -r -d '' intersect<<'EOF'
+BEGIN {
+  downConfig = 1;
+  numUpstream = 0;
+}
+{ 
+  if($1 == "***") {
+    downConfig = 0;
+  } else if(downConfig) {
+    downstream[$1] = $2;
+  } else {
+    numUpstream++;
+    upstream[$1] = downstream[$1];
+  }
+}
+END {
+  cnt = 0;
+  for (p in upstream) {
+    if(cnt==0) {
+      printf("constraints: ");
+    } else {
+      printf("             ");
+    }
+    printf("%s ==%s", p, upstream[p]);
+    cnt++;
+    if(cnt != numUpstream) { printf(",\n"); }
+  }
+}
+EOF
+awk "$intersect"
+# <<< $(cat $1 - $2 <<< "***")
+}
+
+# Takes a configuration file and extracts the "constraints" section.
+isolateConstraints() {
+  sed -n '/^constraints/,/^[^[:space:]]/ p' | sed -e 'n' -e '/^[^[:space:]]/,$ d'
+}
+
+cleanupConstraints() {
+  local line
+  while read line; do
+    sed -E 's/(constraints: |[[:space:]]*)([-_[:alpha:]]*) ==([[:digit:].]*)(,)?$/\2 \3/' <<< "$line"
+  done
+}
+ 
+# Takes two constraint files, downstream and upstream
+updateConstraintsAwk() {
+  { (isolateConstraints | cleanupConstraints) < "$1"; \
+    echo "***"; \
+    (isolateConstraints | cleanupConstraints) < "$2"; } \
+  | awkConstraintIntersection
+}
+
+# Takes a versioned package name, determines if it is already
+# available.
+globallyInstalled() {
+  ghc-pkg --global list "$1" | grep -Fq "$1"
+}
+
+# Takes a constraint line, returns a package name with version
+getDependency() {
+   sed -E 's/(constraints: |[[:space:]]*)([-_[:alpha:]]*) ==([[:digit:].]*)(,)?/\2-\3/'
+}
+
+# Remove packages that come with GHC
+filterOutWiredIn() {
+  grep -Ev "^(base-\d|bin-package-db-\d|rts-\d|ghc-\d|ghc-prim-\d\
+|integer-gmp-\d)"
+}
+
+# Takes a cabal.config file and outputs a list of package names
+getDependencies() {
+  (isolateConstraints < "$1") | getDependency | filterOutWiredIn
+}
+
+# Get dependencies that are /not/ in the global package DB
+getUninstalledDependencies() {
+  read -r -d '' FILTER<<'EOF'
+BEGIN {
+  firstLine = 1;
+}
+{
+  if(firstLine) {
+    split($0,arr," ");
+    for(i in arr) {
+      globallyInstalled[arr[i]] = 1;
+    }
+    firstLine = 0;
+  } else {
+    if(!globallyInstalled[$1]) {
+      print($1);
+    }
+  }
+}
+EOF
+  (ghc-pkg list --global --simple-output; getDependencies "$1") | awk "$FILTER"
+}
+
+# Get the package in this directory's full versioned name
+getMyFullName() {
+  cabal info ./*.cabal | head -n 1 | sed 's/* \([^[:space:]]*\).*/\1/'
+}
+
+# Takes a directory name, and returns the package that can be built
+# from that directory.
+getAddedPackageName() {
+  (cd "$1" && getMyFullName)
+}
+
+# Get a source distribution of an added-source package
+getAddSource() {
+  local CWD=$(pwd)
+  (cd "$1" && cabal sdist -v0 --output-directory="$CWD"/.cabbages/"$(getMyFullName)")
+}
+
+# Takes an element and an array, returns -1 if the element is /not/ in
+# the array; or its index if it is.
+findIndex() {
+  local i
+  declare -a arr=("${!2}")
+  for i in "${!arr[@]}"; do 
+    [[ "${arr[$i]}" == "$1" ]] && echo $i && return 0; done
+  echo "-1"
+  return 1
+
+  # for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
+  # return 1
+}
+
+# Get all dependency sources for the package in the current
+# directory. This handles add-sourced dependencies, or those that
+# "cabal get" can get (i.e. from hackage).
+getDependencySources() {
+  local LISTEDSOURCES="$(cabal sandbox list-sources))"
+  local ADDEDSOURCEDIRS=($(getAddedSources "$LISTEDSOURCES"))
+  local ADDEDSOURCEPACKAGES
+  local i
+  for i in "${!ADDEDSOURCEDIRS[@]}"; do
+    ADDEDSOURCEPACKAGES[$i]=$(getAddedPackageName "${ADDEDSOURCEDIRS[$i]}")
+  done
+  local DEPS=($(getUninstalledDependencies cabal.config))
+  mkdir -p .cabbages
+  local d
+  for d in "${DEPS[@]}"; do
+    i=$(findIndex "$d" ADDEDSOURCEPACKAGES[@])
+    if [ "$i" -gt "-1" ]; then
+      echo "Getting add-source dependency: $d"
+      getAddSource "${ADDEDSOURCEDIRS[$i]}"
+    else
+      if [ -d .cabbages/"$d" ]; then
+        echo "Using existing source dist of $d"
+      else
+        echo "Getting dependency: $d"
+        cabal get "$d" -d .cabbages
+      fi
+    fi
+  done
+}
+
+getPackageDBPath() {
+  if [ -f cabal.sandbox.config ]; then
+    cabal sandbox hc-pkg list | grep ".conf.d" | tail -n 1 | sed 's/.*\/\(.*\)-packages.conf.d.*/\1/'
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Define an attribute for each package. Takes an array of attribute
+# names, and an array of corresponding directory names that are home
+# to Nix package definitions (these are all in the .cabbages
+# directory).
+callCabbages() {
+  local -a NAMES=("${!1}")
+  local PKGS
+  local -a PKGS=("${!2}")
+  local i
+
+  for ((i = 0; i < ${#NAMES[@]}; ++i)); do
+    echo "      ${NAMES[$i]} = callPackage .cabbages/${PKGS[$i]} {"
+    echo "        inherit frozenCabbages haskellBuildTools;"
+    echo "      };"
+  done
+}
+
+# Build a .nix file from a .cabal file in the current directory Takes
+# the ghcPlatform string, this package's name, and whether or not this
+# package should define frozenCabbages.
+mkCabbage() {
+  local NIX
+  local FROZENUPSTREAM
+  local FROZENDEF
+  local LINKSANDBOX
+  local DEPS=($(getUninstalledDependencies cabal.config))
+
+  local DEPNAMES
+  local i
+  for ((i=0; i < ${#DEPS[@]}; ++i)); do
+    # Remove version number from dependency name
+    DEPNAMES[$i]=$(sed 's/\(.*\)-[[:digit:]].*/\1/' <<< "${DEPS[$i]}")
+  done
+
+  if [ "$3" = true ]; then
+    # This is /the/ downstream package
+
+    # We will need the standard callPackage function and cabbageOverrides
+    FROZENUPSTREAM="callPackage, mkCabbageOverrides"
+
+    # We will define the frozenCabbages attribute
+    IFS=$'\n' read -r -d '' FROZENDEF <<EOF
+frozenCabbages = rec {
+      cabbageOverrides = mkCabbageOverrides frozenCabbages;
+$(callCabbages DEPNAMES[@] DEPS[@])
+    };
+EOF
+
+    # We will seed the sandbox /in this directory/ with our
+    # dependencies in the nix store so the user can continue using a
+    # standard cabal workflow (e.g. tools like ghc-mod).
+    mkdir -p .cabal-sandbox/lib/"$1"
+    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/ && \${cabalTmp} sandbox hc-pkg recache";
+  else
+    # This is an upstream package (dependency)
+    FROZENUPSTREAM="frozenCabbages"
+  fi
+
+  local SYNOPSIS=$(cabal info ./*.cabal \
+                   | grep "Synopsis:" \
+                   | sed 's/[[:space:]]*Synopsis:[[:space:]]*\(.*\)/\1/')
+
+  # Now we build up the Nix expression
+  IFS=$'\n' read -r -d '' NIX <<EOF
+{ stdenv, lib, haskellBuildTools, $FROZENUPSTREAM }:
+let cabalTmp = "cabal --config-file=./.cabal/config";
+    $FROZENDEF
+    mkCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
+                     p = pkg.outPath;
+                     libPath = ".cabal-sandbox/lib/$1";
+                     pkgPath = ".cabal-sandbox/$1-packages.conf.d";
+                 in ''ln -s \${p}/\${libPath}/\${nm} \$out/\${libPath}/
+                      ln -s \${p}/\${pkgPath}/\${nm}*.conf \$out/\${pkgPath}/
+                    '';
+    mkSetupCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
+                          p = pkg.outPath;
+                      in "$LINKSANDBOX\n";
+in
+(lib.makeOverridable stdenv.mkDerivation rec {
+  name = "haskell-$2";
+  src = ./.;
+  cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
+  buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps;
+
+  # Build the commands to merge package databases
+  cmds = lib.strings.concatStrings (map mkCmd cabbageDeps);
+  setupCmds = lib.strings.concatStrings (map mkSetupCmd cabbageDeps);
+  cabalFlags = "";
+
+  setup = builtins.toFile "setup.sh" ''
+    
+    # Takes a GHC platform string, an array of add-source dependency
+    # directories, and a string of old timestamps. Produces a new
+    # timestamp string.
+    updateTimeStamps() {
+      local -a DEPS=("''\${!2}")
+      local CUR_TIME=\$(date +%s)
+      local i
+      local STAMPED
+      for ((i = 0; i < "''\${#DEPS[@]}"; ++i)); do
+        STAMPED[\$i]="(\"''\${DEPS[\$i]}\",\$CUR_TIME)"
+      done
+      local NEWSTAMP="(\"\$1\",[''\${STAMPED[@]}])"
+      if echo "\$3" | grep -q "\$1"; then
+        echo "\$3" | sed "s:(\"\$1\",[^]]*\]):\$NEWSTAMP:"
+      else
+        echo "\$3" | sed "s:\]\\\$:\$NEWSTAMP]:"
+      fi
+    }
+    eval "\$setupCmds"
+    SRCS=(\$(cabal sandbox list-sources | sed '1,/^\$/ d' | sed '/^\$/,\$ d'))
+    OLDTIMESTAMPS=\$(cat .cabal-sandbox/add-source-timestamps)
+    updateTimeStamps "$1" SRCS[@] "\$OLDTIMESTAMPS" > .cabal-sandbox/add-source-timestamps
+  '';
+  builder = builtins.toFile "builder.sh" ''
+    source \$stdenv/setup
+    mkdir \$out
+
+    cp -R \$src/* .
+    #*/
+
+    \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init
+    mkdir -p \$out/.cabal-sandbox/lib/$1
+    eval "\$cmds"
+    \${cabalTmp} sandbox hc-pkg recache
+
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$cabalFlags
+    echo "Building..."
+    \${cabalTmp} --builddir=\$out/dist build -v0
+    \${cabalTmp} --builddir=\$out/dist copy
+    \${cabalTmp} --builddir=\$out/dist register
+    \${cabalTmp} --builddir=\$out/dist clean || true
+  '';    
+  meta = {
+    description = "$SYNOPSIS";
+  };
+}).override (let myAttr = (builtins.parseDrvName "$2").name;
+             in lib.attrByPath [ myAttr ] {} frozenCabbages.cabbageOverrides)
+EOF
+
+  echo "$NIX" > default.nix
+}
+
+prepCabbage() {
+  cabal freeze > /dev/null
+  mv cabal.config cabal.config.bak
+  updateConstraintsAwk ../../cabal.config cabal.config.bak > cabal.config
+  mkCabbage "$dbPath" "$d" false
+}
+
+mkCabbages() {
+  cabal freeze
+  local RES=$?
+  if [ $RES -ne 0 ]; then
+    echo "Freezing the downstream package $(pwd) failed ($RES)" && false
+  else
+    echo "Froze downstream package at $(pwd)"
+  fi
+  local dbPath=$(getPackageDBPath)
+  local deps=($(getDependencies cabal.config))
+  getDependencySources
+  pushd .cabbages > /dev/null
+  for d in "${deps[@]}"; do
+    if ! globallyInstalled $d; then
+      echo "Making cabbage: $d"
+      (cd "$d" && prepCabbage)
+    fi
+  done
+  popd > /dev/null
+  
+  mkCabbage "$dbPath" "$(getMyFullName)" true
+}
+
+# Takes a versioned file name, e.g. "foo-0.8.2",
+# and returns "foo ==0.8.2"
+mkConstraintString() {
+  sed 's/\(.*\)-\([[:digit:]].*\)/\1 ==\2/' <<< "$1"
+}
+
+# Takes a versioned file name and produces a minimal cabal file for
+# freezing purposes.
+mkDummyCabal() {
+  local CABAL
+  local SELFDEP=$(mkConstraintString "$1")
+
+  read -r -d '' CABAL<<EOF
+name:               Dummy
+version:            0.1.0.0
+build-type:         Simple
+cabal-version:      >=1.10
+
+library
+  build-depends:    $SELFDEP
+  exposed-modules:
+EOF
+
+  echo "$CABAL"
+}
+
+# If the argument is a cabal file, copy the contents of the directory
+# it is in to the current directory. Otherwise, try using ~cabal get~
+# to download the package from hackage.
+getCabalFile() {
+  if [ -f "$1" ]; then
+    cp -R "$(dirname "$1")"/* .
+  else
+    mkdir -p .cabbages
+    cabal get "$1" -d .cabbages
+    local VERSIONED_NAME=$(ls .cabbages)
+    mkDummyCabal "$VERSIONED_NAME" > dummy.cabal
+  fi
+}
+
+# A default Nix expression suitable for nix-shell or installation.
+defaultShell() {
+  local NIX
+  IFS=$'\n' read -r -d '' NIX <<'EOF'
+with import <nixpkgs> {};
+let myGHC = ghc.ghc784;
+    flagTransformersCompat = frozen:
+      if frozen ? transformers-compat
+      then let v = if frozen ? transformers
+                   then (builtins.parseDrvName frozen.transformers.name).version
+                   else if lib.versionOlder myGHC.version "7.8.5"
+                        then "0.3.0.0"
+                        else "0.4.0.0";
+               flag = 
+                 if lib.versionAtLeast v "0.2"
+                 then if lib.versionOlder v "0.3"
+                      then "-f two"
+                      else if lib.versionOlder v "0.4"
+                           then "-f three"
+                           else ""
+                 else "";
+               flagged = if flag == ""
+                         then {}
+                         else { cabalFlags = flag; };
+           in { transformers-compat = flagged; }
+      else {};
+    mkCabbageOverrides = frozen: flagTransformersCompat frozen;
+in callPackage ./default.nix {
+     inherit mkCabbageOverrides;
+     haskellBuildTools = [ myGHC
+                           haskellPackages.cabalInstall_1_20_0_6
+                           haskellPackages.happy ];
+}
+EOF
+  echo "$NIX"
+}
+
+getNamedCabbage() {
+  local NIX
+  read -r -d '' NIX<<EOF
+with import <nixpkgs> {};
+with import ./shell.nix;
+(lib.findFirst (pkg: (builtins.parseDrvName pkg.name).name == "haskell-$1")
+               {name="Error";}
+               cabbageDeps).outPath
+EOF
+  echo "$NIX" > getNamedCabbage.nix
+
+  local CABBAGE
+  CABBAGE=$(nix-instantiate --eval getNamedCabbage.nix | sed 's/^"\(.*\)"$/\1/')
+  echo "To install $1 in your environment, run:"
+  echo "nix-env -i $CABBAGE"
+}
+
+if [ "$#" -eq 0 ]; then
+  if ! [ -f cabal.sandbox.config ]; then
+    cabal sandbox init
+  fi
+  if ! [ -f shell.nix ]; then
+    defaultShell > shell.nix
+  fi
+  mkCabbages
+else
+  mytmpdir=$(mktemp -d 2>/dev/null || mktemp -d -t 'cabbage-temp')
+  (cd "$mytmpdir" \
+      && getCabalFile "$1" \
+      && cabal sandbox init \
+      && mkCabbages \
+      && defaultShell > shell.nix \
+      && cabal sandbox hc-pkg recache \
+      && nix-shell --run "echo 'Done'" \
+      && getNamedCabbage "$1")
+  rm -r "$mytmpdir"
+fi
