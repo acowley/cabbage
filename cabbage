@@ -82,6 +82,9 @@ filterOutWiredIn() {
 # Takes a cabal.config file and outputs a list of package names
 getDependencies() {
   (isolateConstraints < "$1") | getDependency | filterOutWiredIn
+  if [ -f cabbage.config ]; then
+    (isolateConstraints < cabbage.config) | getDependency | filterOutWiredIn
+  fi
 }
 
 # Get dependencies that are /not/ in the global package DB
@@ -327,8 +330,15 @@ prepCabbage() {
   mkCabbage "$dbPath" "$d" false
 }
 
+# Takes a flag to determine if the dependencies of all targets should
+# be built. If the flag is true, then the build-depends of all targets
+# are consolidated and considered when determining a build plan.
 mkCabbages() {
-  cabal freeze
+  if [ "$1" = true ]; then
+    freezeConsolidatedCabal ./*.cabal
+  else
+    cabal freeze
+  fi
   local RES=$?
   if [ $RES -ne 0 ]; then
     echo "Freezing the downstream package $(pwd) failed ($RES)" && false
@@ -348,6 +358,117 @@ mkCabbages() {
   popd > /dev/null
   
   mkCabbage "$dbPath" "$(getMyFullName)" true
+}
+
+# Consolidate the build-depends stanzas from every target in the given
+# .cabal file.
+consolidateBuildDepends() {
+  local MYNAME=$(grep "^name:" "$1" | sed 's/name:[[:space:]]*\([[:alpha:]].*$\)/\1/')
+  
+  # Print out any "build-depends" stanzas we find. These are delimited
+  # by indentation.
+  read -r -d '' BUILDDEPS<<'EOF'
+BEGIN { buildDep = 0; }
+/[[:space:]]*build-depends: /{ 
+  buildDep = 1;
+  match($0, /^[[:space:]]*/);
+  indentation = RLENGTH;
+  print $0;
+}
+{
+  if(buildDep == 1) {
+    buildDep = 2;
+  } else if(buildDep == 2) {
+    match($0, /^[[:space:]]*/);
+    if(RLENGTH > indentation) {
+      print $0;
+    } else {
+      buildDep = 0;
+    }
+  }
+}
+EOF
+
+  # Given a list of build-depends with the format "package, versions",
+  # deal with potential duplicates in the sequence by choosing the first
+  # non-empty version range encountered for each package name. Prints
+  # out a merged build-depends section.
+  
+  read -r -d '' MERGE<<EOF
+BEGIN { FS=","; count = 0; }
+{
+  if(\$1 == "$MYNAME") {
+  } else if(NF==1 && !(\$1 in constraints)) {
+    count++;
+    constraints[\$1] = "";
+  } else if(NF==2) {
+    if(!(\$1 in constraints)) {
+      constraints[\$1] = \$2;
+      count++;
+    } else if(constraints[\$1] == "") {
+      constraints[\$1] = \$2;
+    }
+  }
+}
+END {
+  i = 0;
+  for(c in constraints) {
+    if(i == 0) {
+      printf("  build-depends: %s%s", c, constraints[c]);
+    } else {
+      printf("                 %s%s", c, constraints[c]);
+    }
+    i++;
+    if(i < count) {
+      printf(",\n");
+    } else {
+      printf("\n");
+    }
+  }
+}
+EOF
+
+  # Get all build-depends stanzas, remove the "build-depends:" string,
+  # commas between dependencies, and line comments. Then, remove leading
+  # spaces and reformat each dependency as "package, versions", and pipe
+  # into the AWK merge program.
+  (awk "$BUILDDEPS" | \
+  sed -e 's/^[[:space:]]*build-depends:[[:space:]]*//' -e 's/,/\
+  /g' -e 's/--.*$//' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]/, /' | \
+  awk "$MERGE") < "$1"
+}
+
+# Takes a .cabal file name and produces a cabal file with a
+# build-depends stanza including the dependencies for every target of
+# the original cabal file for freezing purposes.
+consolidatedTargetsCabal() {
+  local CABAL
+  read -r -d '' CABAL<<'EOF'
+name:               Dummy
+version:            0.1.0.0
+build-type:         Simple
+cabal-version:      >=1.10
+
+library
+  exposed-modules:
+EOF
+
+  echo "$CABAL"
+  consolidateBuildDepends "$1"
+}
+
+freezeConsolidatedCabal() {
+  local NUMCABALS=$(ls ./*.cabal | wc -l)
+  if [ $NUMCABALS -gt 1 ]; then
+    echo "Error: Found multiple cabal files!"
+    exit 1
+  fi
+  local REALCABAL=$(basename $(ls ./*.cabal))
+  consolidatedTargetsCabal "$1" > cabbageDummy.cabal
+  mv "$REALCABAL" cabbageBackup.bak
+  cabal freeze
+  mv cabbageBackup.bak "$REALCABAL"
+  rm cabbageDummy.cabal
 }
 
 # Takes a versioned file name, e.g. "foo-0.8.2",
@@ -444,6 +565,150 @@ EOF
   echo "nix-env -i $CABBAGE"
 }
 
+# Consolidate the build-depends stanzas from every target in the given
+# .cabal file.
+consolidateBuildDepends() {
+  local MYNAME=$(grep "^name:" "$1" | sed 's/name:[[:space:]]*\([[:alpha:]].*$\)/\1/')
+  
+  # Print out any "build-depends" stanzas we find. These are delimited
+  # by indentation.
+  read -r -d '' BUILDDEPS<<'EOF'
+BEGIN { buildDep = 0; }
+/[[:space:]]*build-depends: /{ 
+  buildDep = 1;
+  match($0, /^[[:space:]]*/);
+  indentation = RLENGTH;
+  print $0;
+}
+{
+  if(buildDep == 1) {
+    buildDep = 2;
+  } else if(buildDep == 2) {
+    match($0, /^[[:space:]]*/);
+    if(RLENGTH > indentation) {
+      print $0;
+    } else {
+      buildDep = 0;
+    }
+  }
+}
+EOF
+
+  # Given a list of build-depends with the format "package, versions",
+  # deal with potential duplicates in the sequence by choosing the first
+  # non-empty version range encountered for each package name. Prints
+  # out a merged build-depends section.
+  
+  read -r -d '' MERGE<<EOF
+BEGIN { FS=","; count = 0; }
+{
+  if(\$1 == "$MYNAME") {
+  } else if(NF==1 && !(\$1 in constraints)) {
+    count++;
+    constraints[\$1] = "";
+  } else if(NF==2) {
+    if(!(\$1 in constraints)) {
+      constraints[\$1] = \$2;
+      count++;
+    } else if(constraints[\$1] == "") {
+      constraints[\$1] = \$2;
+    }
+  }
+}
+END {
+  i = 0;
+  for(c in constraints) {
+    if(i == 0) {
+      printf("  build-depends: %s%s", c, constraints[c]);
+    } else {
+      printf("                 %s%s", c, constraints[c]);
+    }
+    i++;
+    if(i < count) {
+      printf(",\n");
+    } else {
+      printf("\n");
+    }
+  }
+}
+EOF
+
+  # Get all build-depends stanzas, remove the "build-depends:" string,
+  # commas between dependencies, and line comments. Then, remove leading
+  # spaces and reformat each dependency as "package, versions", and pipe
+  # into the AWK merge program.
+  (awk "$BUILDDEPS" | \
+  sed -e 's/^[[:space:]]*build-depends:[[:space:]]*//' -e 's/,/\
+  /g' -e 's/--.*$//' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]/, /' | \
+  awk "$MERGE") < "$1"
+}
+
+# Takes a .cabal file name and produces a cabal file with a
+# build-depends stanza including the dependencies for every target of
+# the original cabal file for freezing purposes.
+consolidatedTargetsCabal() {
+  local CABAL
+  read -r -d '' CABAL<<'EOF'
+name:               Dummy
+version:            0.1.0.0
+build-type:         Simple
+cabal-version:      >=1.10
+
+library
+  exposed-modules:
+EOF
+
+  echo "$CABAL"
+  consolidateBuildDepends "$1"
+}
+
+freezeConsolidatedCabal() {
+  local NUMCABALS=$(ls ./*.cabal | wc -l)
+  if [ $NUMCABALS -gt 1 ]; then
+    echo "Error: Found multiple cabal files!"
+    exit 1
+  fi
+  local REALCABAL=$(basename $(ls ./*.cabal))
+  consolidatedTargetsCabal "$1" > cabbageDummy.cabal
+  mv "$REALCABAL" cabbageBackup.bak
+  cabal freeze
+  mv cabbageBackup.bak "$REALCABAL"
+  rm cabbageDummy.cabal
+}
+
+showHelp() {
+  echo "Usage: cabbage [-a] [packageName]"
+  echo ""
+  echo "- Run cabbage in a directory with a .cabal file to build Nix"
+  echo "  expressions for the current package and all of its dependencies."
+  echo "  Then run 'nix-shell --run 'sh $setup'' to ensure that all "
+  echo "  dependencies are available in the Nix store, and to link them into "
+  echo "  the sandbox. "
+  echo "  If no sandbox is in the current directory, a new one will be created."
+  echo ""
+  echo "- The '-a' option will additionally link the dependencies of all "
+  echo "  build targets of the current .cabal file. Without this option, "
+  echo "  dependencies of test and benchmark suites won't be installed or "
+  echo "  linked into the sandbox"
+  echo ""
+  echo "- If cabbage is given a path to a .cabal file or a package name "
+  echo "  (with optional version suffix) available on hackage, that package "
+  echo "  will be built in a temporary directory so that it is available in "
+  echo "  the Nix store for future builds. If you want executables provided "
+  echo "  by that package to be linked into your environment, follow the "
+  echo "  instructions in the last line of cabbage output."
+}
+
+ALLTARGETS=false
+
+while getopts ":ah" opt; do
+  case "$opt" in
+    a) ALLTARGETS=true;;
+    h|\?) showHelp; exit 0;;
+  esac
+done
+shift $((OPTIND - 1))
+
 if [ "$#" -eq 0 ]; then
   if ! [ -f cabal.sandbox.config ]; then
     cabal sandbox init
@@ -451,13 +716,13 @@ if [ "$#" -eq 0 ]; then
   if ! [ -f shell.nix ]; then
     defaultShell > shell.nix
   fi
-  mkCabbages
+  mkCabbages $ALLTARGETS
 else
   mytmpdir=$(mktemp -d 2>/dev/null || mktemp -d -t 'cabbage-temp')
   (cd "$mytmpdir" \
       && getCabalFile "$1" \
       && cabal sandbox init \
-      && mkCabbages \
+      && mkCabbages $ALLTARGETS \
       && defaultShell > shell.nix \
       && cabal sandbox hc-pkg recache \
       && nix-shell --run "echo 'Done'" \
