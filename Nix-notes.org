@@ -926,7 +926,7 @@ EOF
     # dependencies in the nix store so the user can continue using a
     # standard cabal workflow (e.g. tools like ghc-mod).
     mkdir -p .cabal-sandbox/lib/"$1"
-    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/ && \${cabalTmp} sandbox hc-pkg recache";
+    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/";
   else
     # This is an upstream package (dependency)
     FROZENUPSTREAM="frozenCabbages"
@@ -966,6 +966,7 @@ in
   setup = builtins.toFile "setup.sh" ''
     <<updateTimeStamps>>
     eval "\$setupCmds"
+    \${cabalTmp} sandbox hc-pkg recache
     SRCS=(\$(cabal sandbox list-sources | sed '1,/^\$/ d' | sed '/^\$/,\$ d'))
     OLDTIMESTAMPS=\$(cat .cabal-sandbox/add-source-timestamps)
     updateTimeStamps "$1" SRCS[@] "\$OLDTIMESTAMPS" > .cabal-sandbox/add-source-timestamps
@@ -1204,12 +1205,12 @@ EOF
 }
 
 freezeConsolidatedCabal() {
-  local NUMCABALS=$(ls ./*.cabal | wc -l)
-  if [ $NUMCABALS -gt 1 ]; then
+  local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
+  if [ "$NUMCABALS" -gt 1 ]; then
     echo "Error: Found multiple cabal files!"
     exit 1
   fi
-  local REALCABAL=$(basename $(ls ./*.cabal))
+  local REALCABAL=$(basename "$(ls ./*.cabal)")
   consolidatedTargetsCabal "$1" > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
   cabal freeze
@@ -1383,7 +1384,6 @@ directory.
 #+BEGIN_SRC sh :exports code :tangle cabbage :noweb yes
 <<getCabalFile>>
 <<defaultShell>>
-<<freezeConsolidatedCabal>>
 
 showHelp() {
   echo "Usage: cabbage [-a] [packageName]"

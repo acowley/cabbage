@@ -232,7 +232,7 @@ EOF
     # dependencies in the nix store so the user can continue using a
     # standard cabal workflow (e.g. tools like ghc-mod).
     mkdir -p .cabal-sandbox/lib/"$1"
-    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/ && \${cabalTmp} sandbox hc-pkg recache";
+    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/";
   else
     # This is an upstream package (dependency)
     FROZENUPSTREAM="frozenCabbages"
@@ -290,6 +290,7 @@ in
       fi
     }
     eval "\$setupCmds"
+    \${cabalTmp} sandbox hc-pkg recache
     SRCS=(\$(cabal sandbox list-sources | sed '1,/^\$/ d' | sed '/^\$/,\$ d'))
     OLDTIMESTAMPS=\$(cat .cabal-sandbox/add-source-timestamps)
     updateTimeStamps "$1" SRCS[@] "\$OLDTIMESTAMPS" > .cabal-sandbox/add-source-timestamps
@@ -458,12 +459,12 @@ EOF
 }
 
 freezeConsolidatedCabal() {
-  local NUMCABALS=$(ls ./*.cabal | wc -l)
-  if [ $NUMCABALS -gt 1 ]; then
+  local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
+  if [ "$NUMCABALS" -gt 1 ]; then
     echo "Error: Found multiple cabal files!"
     exit 1
   fi
-  local REALCABAL=$(basename $(ls ./*.cabal))
+  local REALCABAL=$(basename "$(ls ./*.cabal)")
   consolidatedTargetsCabal "$1" > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
   cabal freeze
@@ -563,117 +564,6 @@ EOF
   CABBAGE=$(nix-instantiate --eval getNamedCabbage.nix | sed 's/^"\(.*\)"$/\1/')
   echo "To install $1 in your environment, run:"
   echo "nix-env -i $CABBAGE"
-}
-
-# Consolidate the build-depends stanzas from every target in the given
-# .cabal file.
-consolidateBuildDepends() {
-  local MYNAME=$(grep "^name:" "$1" | sed 's/name:[[:space:]]*\([[:alpha:]].*$\)/\1/')
-  
-  # Print out any "build-depends" stanzas we find. These are delimited
-  # by indentation.
-  read -r -d '' BUILDDEPS<<'EOF'
-BEGIN { buildDep = 0; }
-/[[:space:]]*build-depends: /{ 
-  buildDep = 1;
-  match($0, /^[[:space:]]*/);
-  indentation = RLENGTH;
-  print $0;
-}
-{
-  if(buildDep == 1) {
-    buildDep = 2;
-  } else if(buildDep == 2) {
-    match($0, /^[[:space:]]*/);
-    if(RLENGTH > indentation) {
-      print $0;
-    } else {
-      buildDep = 0;
-    }
-  }
-}
-EOF
-
-  # Given a list of build-depends with the format "package, versions",
-  # deal with potential duplicates in the sequence by choosing the first
-  # non-empty version range encountered for each package name. Prints
-  # out a merged build-depends section.
-  
-  read -r -d '' MERGE<<EOF
-BEGIN { FS=","; count = 0; }
-{
-  if(\$1 == "$MYNAME") {
-  } else if(NF==1 && !(\$1 in constraints)) {
-    count++;
-    constraints[\$1] = "";
-  } else if(NF==2) {
-    if(!(\$1 in constraints)) {
-      constraints[\$1] = \$2;
-      count++;
-    } else if(constraints[\$1] == "") {
-      constraints[\$1] = \$2;
-    }
-  }
-}
-END {
-  i = 0;
-  for(c in constraints) {
-    if(i == 0) {
-      printf("  build-depends: %s%s", c, constraints[c]);
-    } else {
-      printf("                 %s%s", c, constraints[c]);
-    }
-    i++;
-    if(i < count) {
-      printf(",\n");
-    } else {
-      printf("\n");
-    }
-  }
-}
-EOF
-
-  # Get all build-depends stanzas, remove the "build-depends:" string,
-  # commas between dependencies, and line comments. Then, remove leading
-  # spaces and reformat each dependency as "package, versions", and pipe
-  # into the AWK merge program.
-  (awk "$BUILDDEPS" | \
-  sed -e 's/^[[:space:]]*build-depends:[[:space:]]*//' -e 's/,/\
-  /g' -e 's/--.*$//' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]/, /' | \
-  awk "$MERGE") < "$1"
-}
-
-# Takes a .cabal file name and produces a cabal file with a
-# build-depends stanza including the dependencies for every target of
-# the original cabal file for freezing purposes.
-consolidatedTargetsCabal() {
-  local CABAL
-  read -r -d '' CABAL<<'EOF'
-name:               Dummy
-version:            0.1.0.0
-build-type:         Simple
-cabal-version:      >=1.10
-
-library
-  exposed-modules:
-EOF
-
-  echo "$CABAL"
-  consolidateBuildDepends "$1"
-}
-
-freezeConsolidatedCabal() {
-  local NUMCABALS=$(ls ./*.cabal | wc -l)
-  if [ $NUMCABALS -gt 1 ]; then
-    echo "Error: Found multiple cabal files!"
-    exit 1
-  fi
-  local REALCABAL=$(basename $(ls ./*.cabal))
-  consolidatedTargetsCabal "$1" > cabbageDummy.cabal
-  mv "$REALCABAL" cabbageBackup.bak
-  cabal freeze
-  mv cabbageBackup.bak "$REALCABAL"
-  rm cabbageDummy.cabal
 }
 
 showHelp() {
