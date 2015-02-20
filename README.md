@@ -69,3 +69,9 @@ be added.
 *NOTE*: The `cabbage` tool will not overwrite a `shell.nix` if one
 exists, so, if you want `cabbage` to generate a fresh default
 `shell.nix`, delete the old one first.
+
+The Name
+---
+
+I wish I could take credit for the name `cabbage`, but it is entirely
+due to Shae Erisson (shapr).
