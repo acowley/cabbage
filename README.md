@@ -49,12 +49,16 @@ point on, you can `cabal configure`, etc. as you normally would with
 cabal sandbox development.
 
 To compile a library from [hackage](http://hackage.haskell.org) and
-cache it in the Nix store, run `cabbage text` (to install, e.g., the
-`text` package). This does not link the named package in your Nix
+cache it in the Nix store, run `cabbage pandoc` (to install, e.g., the
+`pandoc` package). This does not link the named package in your Nix
 environment, but makes the package available for re-use in subsequent
 builds. If the named package includes executables that you *do* want
 to link into your environment, follow the instructions in the last
-line of output from the cabbage command (i.e. `cabbage text`).
+line of output from the cabbage command (i.e. `cabbage pandoc`).
+
+See the
+[overview](https://github.com/acowley/cabbage/blob/master/Nix-notes.org#overview)
+section of the source code for more information.
 
 Customization
 ---
