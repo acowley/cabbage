@@ -4,31 +4,54 @@ The idea is that every build takes place in a cabal sandbox.
 We ultimately want to create a derivation that has been parameterized
 by a set of constraints. We obtain the right constraints by running
 =cabal freeze= on the downstream package we are trying to build, then
-intersecting the result of =cabal freeze= on each upstream package
-with that original constraints file. The smaller constraints file
-becomes part of the nix derivation of the upstream package, meaning we
-can have multiple instances of the same version of a package that have
-been built with different dependencies.
+intersecting the result of =cabal freeze= run against each upstream
+package with that original constraints file. The smaller constraints
+file becomes part of the nix derivation of the upstream package,
+meaning we can have multiple instances of the same version of a
+package that have been built with different dependencies.
 
 Those very specific derivations go into the Nix store so that they
-might be re-used. We re-use them by creating the derivation, then
-asking for the =outPath= and checking if it already exists (or
-something to that effect).
+might be re-used when the same specific instance of a package version
+is again required.
+
+** Installation
+The ~cabbage~ script is tangled from this file. Make it executable and
+put it on your ~PATH~, or invoke it however you prefer. It is a
+regular bash script that calls out to ~sed~, ~awk~, ~grep~, etc.
 
 ** Development Workflow
-
-Create a sandbox and a cabal file. Run ~cabbage.sh~ in your project's
-root directory. Run,
+Create a sandbox and a cabal file. Run ~cabbage~ in your project's
+root directory. Then run,
 
 #+BEGIN_SRC sh :exports none
 nix-shell --run 'sh $setup'
 #+END_SRC
 
 to make sure all dependencies are built and linked into your
-sandbox. Then, you can ~cabal configure~ etc., outside of ~nix-shell~
-and work as usual.
+sandbox. At this point, you can ~cabal configure~ etc., outside of
+~nix-shell~ and work as usual.
 
-** Shebang
+If you have benchmark or test suites, you will want to run ~cabbage
+-a~ to indicate that /all/ targets should be considered when gathering
+dependencies.
+
+** Working with other packages
+You can also pass ~cabbage~ a path to a ~.cabal~ file or give it the
+name of a package on [[http://hackage.haskell.org][hackage]] (which itself may have a version
+suffix). In this case, ~cabbage~ will do its work in a temporary
+directory. The side effect of building a named package is that the
+package and all its dependencies will now exist in your Nix store so
+that subsequent builds may make use of them.
+
+Another use of this named installation interface is to install
+executables. To link the executables (e.g. [[http://hackage.haskell.org/package/pandoc][pandoc]]) built from a
+package into your environment, follow the instructions given in the
+last line of ~cabbage~ output after running ~cabbage pandoc~. It will
+give you a ~nix-env -i~ invocation that points to where ~pandoc~ has
+been built in your Nix store so that it gets linked into your
+environment.
+
+* Shebang
 Put a shebang line at the top of our tangled program.
 
 #+BEGIN_SRC sh :tangle cabbage :padline no
