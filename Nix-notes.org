@@ -105,142 +105,39 @@ downstream package before configuring.
 
 * =cabal.config= Intersection
 We want to take the version constraints from a downstream constraints
-file, and swap them into an upstream constraints file.
+file, and merge them into an upstream constraints file.
 
-We first use sed to isolate the constraint lines.
-#+NAME: isolateConstraints
-#+BEGIN_SRC sh :exports code
+There are two approaches to doing this:
 
-# Takes a configuration file and extracts the "constraints" section.
-isolateConstraints() {
-  sed -n '/^constraints/,/^[^[:space:]]/ p' | sed -e 'n' -e '/^[^[:space:]]/,$ d'
-}
+1. Freeze downstream and upstream independently, then intersect the
+   constraints
+2. Freeze downstream, then edit the upstream package's ~.cabal~ file
+   to replace all version constraints with equality constraints
+   gleaned from the downstream ~cabal.config~ file
 
-cleanupConstraints() {
-  local line
-  while read line; do
-    sed -E 's/(constraints: |[[:space:]]*)([-_[:alpha:]]*) ==([[:digit:].]*)(,)?$/\2 \3/' <<< "$line"
-  done
-}
-#+END_SRC
+A problem with the first option is that sometimes Cabal's solver is
+able to find a build plan for a downstream package while it is unable
+to find a plan for an upstream dependency. This is rather odd, but it
+happens. Another problem is that it is a bit slow, and feels somewhat
+redundant since the downstream freeze fixes all the versions, the
+upstream freeze is only used to get the transitive closure of the set
+of dependencies of the upstream package. This is just a limitation of
+what ~cabal-install~ offers.
 
-*** Example data
+The second option is not great as it doesn't take into account further
+upstream dependencies that are constrained by other dependencies of
+the downstream package. It also requires careful surgery of the rather
+complicated ~.cabal~ file format. We must preserve any logic expressed
+therein so that freezing the newly constrained ~.cabal~ file may rely
+on that logic.
 
-#+BEGIN_SRC sh :exports none :results output :noweb yes
-<<isolateConstraints>>
-read -r -d '' CONFIG<<'EOF'
-constraints: GLURaw ==1.4.0.1,
-             JuicyPixels ==3.1.6.1,
-             OpenGL ==2.10.0.0,
-             OpenGLRaw ==1.5.0.0,
-             adjunctions ==4.2,
-             array ==0.5.0.0,
-             base ==4.7.0.1,
-             bifunctors ==4.1.1.1,
-             binary ==0.7.1.0,
-             bytestring ==0.10.4.0,
-             comonad ==4.2.2,
-             containers ==0.5.5.1,
-             contravariant ==1.2,
-             cpphs ==1.18.5,
-             deepseq ==1.3.0.2,
-             directory ==1.2.1.0,
-             distributive ==0.4.4,
-             exceptions ==0.6.1,
-             filepath ==1.3.0.2,
-             free ==4.9,
-             ghc-prim ==0.3.1.0,
-             hashable ==1.2.2.0,
-             integer-gmp ==0.5.1.0,
-             lens ==4.4,
-             linear ==1.10.1.2,
-             mtl ==2.1.3.1,
-             nats ==0.2,
-             old-locale ==1.0.0.6,
-             old-time ==1.1.0.2,
-             parallel ==3.2.0.4,
-             polyparse ==1.9,
-             prelude-extras ==0.4,
-             pretty ==1.1.1.1,
-             primitive ==0.5.3.0,
-             profunctors ==4.2.0.1,
-             reflection ==1.5.1,
-             rts ==1.0,
-             semigroupoids ==4.2,
-             semigroups ==0.15.2,
-             split ==0.2.2,
-             tagged ==0.7.2,
-             template-haskell ==2.9.0.0,
-             text ==1.1.1.3,
-             time ==1.4.2,
-             transformers ==0.3.0.0,
-             transformers-compat ==0.3.3.4,
-             unix ==2.7.0.1,
-             unordered-containers ==0.2.5.0,
-             vector ==0.10.11.0,
-             void ==0.6.1,
-             zlib ==0.5.4.1
-documentation: True
-EOF
-
-CLEAN=$((isolateConstraints | cleanupConstraints) <<< "$CONFIG")
-echo "$CLEAN"
-#+END_SRC
-
-#+RESULTS:
-#+begin_example
-GLURaw 1.4.0.1
-JuicyPixels 3.1.6.1
-OpenGL 2.10.0.0
-OpenGLRaw 1.5.0.0
-adjunctions 4.2
-array 0.5.0.0
-base 4.7.0.1
-bifunctors 4.1.1.1
-binary 0.7.1.0
-bytestring 0.10.4.0
-comonad 4.2.2
-containers 0.5.5.1
-contravariant 1.2
-cpphs 1.18.5
-deepseq 1.3.0.2
-directory 1.2.1.0
-distributive 0.4.4
-exceptions 0.6.1
-filepath 1.3.0.2
-free 4.9
-ghc-prim 0.3.1.0
-hashable 1.2.2.0
-integer-gmp 0.5.1.0
-lens 4.4
-linear 1.10.1.2
-mtl 2.1.3.1
-nats 0.2
-old-locale 1.0.0.6
-old-time 1.1.0.2
-parallel 3.2.0.4
-polyparse 1.9
-prelude-extras 0.4
-pretty 1.1.1.1
-primitive 0.5.3.0
-profunctors 4.2.0.1
-reflection 1.5.1
-rts 1.0
-semigroupoids 4.2
-semigroups 0.15.2
-split 0.2.2
-tagged 0.7.2
-template-haskell 2.9.0.0
-text 1.1.1.3
-time 1.4.2
-transformers 0.3.0.0
-transformers-compat 0.3.3.4
-unix 2.7.0.1
-unordered-containers 0.2.5.0
-vector 0.10.11.0
-void 0.6.1
-zlib 0.5.4.1
-#+end_example
+** Independent freezing
+The ~cabal freeze~ command is rather underfeatured: it does not
+support supplying extra constraints or flags for dependencies. This
+can prevent it from finding build plans when we artificially constraint the
+~.cabal~ file with constraints from a downstream package. Another
+approach is to ~cabal freeze~ the upstream package on its own, then
+intersect that ~cabal.config~ file with the one from downstream.
 
 *** AWK constraint intersection
 #+NAME: awkConstraintIntersection
@@ -318,9 +215,9 @@ echo "$RES"
  
 # Takes two constraint files, downstream and upstream
 updateConstraintsAwk() {
-  { (isolateConstraints | cleanupConstraints) < "$1"; \
+  { (isolateAndCleanupConstraints < "$1"); \
     echo "***"; \
-    (isolateConstraints | cleanupConstraints) < "$2"; } \
+    (isolateAndCleanupConstraints < "$2"); } \
   | awkConstraintIntersection
 }
 #+END_SRC
@@ -333,6 +230,7 @@ updateConstraintsAwk experiments/a-cabal.config experiments/b-cabal.config
 
 #+RESULTS:
 : constraints: base ==4.8,
+:              rts ==1.0,
 :              ghc-prim ==0.3.1.0,
 :              integer-gmp ==0.5.1.0
 
@@ -345,44 +243,13 @@ constraints: GLURaw ==1.4.0.1,
              JuicyPixels ==3.1.6.1,
              OpenGL ==2.10.0.0,
              OpenGLRaw ==1.5.0.0,
-             adjunctions ==4.2,
              array ==0.5.0.0,
              base ==4.7.0.1,
-             bifunctors ==4.1.1.1,
-             binary ==0.7.1.0,
              bytestring ==0.10.4.0,
-             comonad ==4.2.2,
              containers ==0.5.5.1,
-             contravariant ==1.2,
-             cpphs ==1.18.5,
-             deepseq ==1.3.0.2,
-             directory ==1.2.1.0,
-             distributive ==0.4.4,
-             exceptions ==0.6.1,
-             filepath ==1.3.0.2,
-             free ==4.9,
              ghc-prim ==0.3.1.0,
              hashable ==1.2.2.0,
              integer-gmp ==0.5.1.0,
-             lens ==4.4,
-             linear ==1.10.1.2,
-             mtl ==2.1.3.1,
-             nats ==0.2,
-             old-locale ==1.0.0.6,
-             old-time ==1.1.0.2,
-             parallel ==3.2.0.4,
-             polyparse ==1.9,
-             prelude-extras ==0.4,
-             pretty ==1.1.1.1,
-             primitive ==0.5.3.0,
-             profunctors ==4.2.0.1,
-             reflection ==1.5.1,
-             rts ==1.0,
-             semigroupoids ==4.2,
-             semigroups ==0.15.2,
-             split ==0.2.2,
-             tagged ==0.7.2,
-             template-haskell ==2.9.0.0,
              text ==1.1.1.3,
              time ==1.4.2,
              transformers ==0.3.0.0,
@@ -424,6 +291,216 @@ rm $TMP2
 :              ghc-prim ==0.3.1.0,
 :              array ==0.5.0.0,
 :              integer-gmp ==0.5.1.0
+
+** Updating build-depends constraints in-place
+
+This approach process an entire ~.cabal~ file, leaving everything
+intact except for dependency constraints that are overridden by the
+~cabal.config~ generated for the downstream package.
+
+#+NAME: pinBuildDepends
+#+BEGIN_SRC sh :exports code :tangle cabbage
+pinBuildDepends() {
+  local PIN
+  read -r -d '' PIN<<'EOF'
+BEGIN { 
+  downConfig = 1;
+  buildDep = 0;
+}
+/[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:/ {
+  match($0, /^[[:space:]]*/);
+  indentation = RLENGTH;
+  for(i = 0; i < RLENGTH; ++i) printf(" ");
+  printf("build-depends:");
+
+  buildDep = 2;
+  gsub(/^[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:/,"",$0);
+}
+{
+  if(downConfig && $1 == "***") {
+    downConfig = 0;
+    FS=",";
+  } else if(downConfig) {
+    downstream[$1] = $2;
+  } else if(buildDep) {
+    match($0, /^[[:space:]]*/);
+    if(buildDep == 2 || RLENGTH > indentation) {
+      buildDep = 1;
+      # Update a line of a build-depend
+      for(i = 1; i <= NF; ++i) {
+        if(i == NF && match($(i), "^[[:space:]]*$")) {
+        } else {
+          if(i == 1) {
+            # Add leading spaces
+            match($(i), "^[[:space:]]*");
+            for(j = 0; j < RLENGTH; ++j) {
+              printf(" ");
+            }
+          }
+          gsub(/^[[:space:]]*/,"",$(i));
+          gsub(/[[:space:]]*$/,"",$(i));
+          if(match($(i), "[ ><=]")) {
+            pkgName = substr($(i), 1, RSTART - 1);
+            if(pkgName in downstream) {
+              printf("%s ==%s", pkgName, downstream[pkgName]);
+            } else {
+              printf("%s", $(i));
+            }
+          } else {
+            if($(i) in downstream) {
+              printf("%s ==%s", $(i), downstream[$(i)]);
+            } else {
+              printf("%s", $(i));
+            }
+          }
+        }
+        if(i < NF) printf(", ");
+      }
+      printf("\n");
+    } else {
+      # We've left a build-depends stanza
+      buildDep = 0;
+      print $0
+    }
+  } else {
+    # Everything else gets printed
+    print $0
+  }
+}
+EOF
+  awk "$PIN"
+}
+#+END_SRC
+
+#+BEGIN_SRC sh :noweb yes :results output
+<<pinBuildDepends>>
+<<isolateConstraints>>
+
+{ (isolateAndCleanupConstraints < ../Frames/cabal.config); \
+  echo "***"; \
+  cat ../Frames/.cabbages/hashable-1.2.3.1/hashable.cabal; } \
+| pinBuildDepends
+
+#+END_SRC
+
+** Build-depends reformatting
+We sometimes extract one or more ~build-depends~ stanzas from a
+~.cabal~ file. These are comma separated, can contain line comments,
+and are spaced somewhat unpredictably. This helper reformats them to
+"package, constraint" format
+
+#+NAME: buildDependsReformat
+#+BEGIN_SRC sh :exports code :tangle cabbage
+
+# Given a build-depends stanza, remove the "build-depends:" string,
+# commas between dependencies, and line comments. Then, remove leading
+# spaces and reformat each dependency as "package, versions".
+buildDependsReformat() {
+  sed -e 's/^[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:[[:space:]]*//' -e 's/,/\
+  /g' -e 's/--.*$//' | sed -e 's/^[[:space:]]*//' -e 's/ /, /' \
+  -e 's/\([[:alpha:]]\)\([<>=]\)/\1, \2/'
+}
+#+END_SRC
+
+** Build-depends updating
+We simplify the job of ~cabal freeze~ by giving it a ~.cabal~ file
+that is already loaded with the constraints of the downstream
+package's ~cabal.config~ file.
+
+** Working with ~cabal.config~ files
+We first use sed to isolate the constraint lines.
+#+NAME: isolateConstraints
+#+BEGIN_SRC sh :exports code :tangle cabbage
+
+# Takes a configuration file and extracts the "constraints" section.
+isolateConstraints() {
+  sed -n '/^constraints/,/^[^[:space:]]/ p' | sed -e 'n' -e '/^[^[:space:]]/,$ d'
+}
+
+isolateAndCleanupConstraints() {
+  isolateConstraints | sed -e 's/^constraints: //' -e 's/^[[:space:]]*//' \
+  | sed 's/\([-_[:alpha:]]*\) ==\([[:digit:].]*\),*$/\1 \2/'
+}
+#+END_SRC
+
+#+BEGIN_SRC sh :noweb yes :results output
+<<isolateConstraints>>
+cat "../GLUtil/cabal.config" | isolateAndCleanupConstraints
+#+END_SRC
+
+** A dummy Cabal Library
+
+#+NAME: dummyCabalLibrary
+#+BEGIN_SRC sh :tangle cabbage :exports code
+
+# The start of a Cabal library specification, ready for a
+# build-depends stanza.
+dummyCabalLibrary() {
+  echo "name:               Dummy"
+  echo "version:            0.1.0.0"
+  echo "build-type:         Simple"
+  echo "cabal-version:      >=1.10"
+  echo ""
+  echo "library"
+  echo "  exposed-modules:"
+}
+#+END_SRC
+
+** Freezing with downstream constraints
+Now we can put the constraint intersection pieces together. We take a
+~cabal.config~ produced by ~cabal freeze~ run against a downstream
+package and a ~.cabal~ file for an upstream package mentioned in that
+~cabal.config~ file. We produce a temporary upstream package ~.cabal~
+file with all versions pinned by the downstream ~cabal.config~, and
+pass that to ~cabal freeze~ to obtain the upstream package's
+transitive dependencies.
+
+#+NAME: freezeWithConstraints
+#+BEGIN_SRC sh :exports code :tangle cabbage
+
+# Takes a constraints file and works with the .cabal file in the
+# current directory.
+freezeWithConstraints() {
+  local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
+  if [ "$NUMCABALS" -gt 1 ]; then
+    echo "Error: Found multiple cabal files in $(pwd)"
+    exit 1
+  fi
+  local REALCABAL=$(basename "$(ls ./*.cabal)")
+  ({ (isolateAndCleanupConstraints < "$1"); echo "***"; cat "$REALCABAL"; } \
+   | pinBuildDepends) > cabbageDummy.cabal
+  mv "$REALCABAL" cabbageBackup.bak
+  cabal freeze
+  local OK=$?
+  mv cabbageBackup.bak "$REALCABAL"
+  rm cabbageDummy.cabal
+  return $OK
+}
+#+END_SRC
+
+*** Example data
+
+#+BEGIN_SRC sh :exports none :results output :noweb yes
+<<isolateConstraints>>
+read -r -d '' CONFIG<<'EOF'
+constraints: GLURaw ==1.4.0.1,
+             JuicyPixels ==3.1.6.1,
+             OpenGL ==2.10.0.0,
+             OpenGLRaw ==1.5.0.0,
+             zlib ==0.5.4.1
+documentation: True
+EOF
+
+CLEAN=$(isolateAndCleanupConstraints <<< "$CONFIG")
+echo "$CLEAN"
+#+END_SRC
+
+#+RESULTS:
+: GLURaw 1.4.0.1
+: JuicyPixels 3.1.6.1
+: OpenGL 2.10.0.0
+: OpenGLRaw 1.5.0.0
+: zlib 0.5.4.1
 
 * Time stamps
 Add-sourced dependencies are tracked with a time stamp that cabal uses
@@ -511,6 +588,150 @@ updateTimeStamps "$ghcPlatform" deps[@] "$oldStampsPop"
 : [("x86_64-osx-ghc-7.8.4",[("/A/B/C",1423839326) ("/Foo/Bar Me/Baz",1423839326)])]
 : [("x86_64-osx-ghc-7.8.3", [("/A/B/C", 42)]),("x86_64-osx-ghc-7.8.4",[("/A/B/C",1423839326) ("/Foo/Bar Me/Baz",1423839326)])]
 
+* Flag overrides
+We support setting project-wide flags in a ~cabbage.config~ file that
+looks somewhat like a ~cabal.config~ file.
+
+#+NAME: flagsFor
+#+BEGIN_SRC sh :tangle cabbage :exports code
+
+# Versioned package name. Remove the version number from a versioned
+# package name.
+versionedPackageName() {
+  sed 's/\(.*\)-[-[:digit:].]*$/\1/' <<< "$1"
+}
+
+# Returns any flags set for the given package name in a cabbage.config
+# file
+flagsFor() {
+  local FINDFLAGS
+  read -r -d '' FINDFLAGS<<EOF
+BEGIN { inFlags = 0; }
+/^flags:/ { inFlags = 1; }
+/^[^[:space:]]/ { if(inFlags == 2) { exit 0; } }
+{
+  if(inFlags == 1) {
+    inFlags = 2;
+  } else if(inFlags == 2) {
+    gsub(/^[[:space:]]*/,"",\$1);
+    if(\$1 == "$1:") {
+      for(i = 2; i <= NR; ++i) {
+        printf("%s", \$(i));
+        if(i != NR) { printf(" "); }
+      }
+    }
+  }
+}
+EOF
+  awk "$FINDFLAGS"
+}
+
+# Takes a flag setting and replaces occurences of that flag in a
+# .cabal file with the boolean value indicated by the argument. An
+# argument of "foo" or "+foo" sets flag "foo" to "True", while "-foo"
+# sets it to "False".
+fixFlagValue() {
+  local PAT
+  local VAL
+  if [ "${1:0:1}" = "+" ]; then
+    PAT="flag(${1:1})"
+    VAL="True"
+  elif [ "${1:0:1}" = "-" ]; then
+    PAT="flag(${1:1})"
+    VAL="False"
+  else
+    PAT="flag($1)"
+    VAL="True"
+  fi
+  sed "s/$PAT/$VAL/g"
+}
+
+# Takes a space-separated list of flag values, and fixes their
+# assignments in the .cabal file in the current directory.
+fixAllFlags() {
+  local CABAL=$(basename "$(ls ./*.cabal)")
+  local -a ARR=($1)
+  for f in "${ARR[@]}"; do
+    (cat "$CABAL" | fixFlagValue "$f") > "$CABAL.tmp"
+    mv "$CABAL.tmp" "$CABAL"
+  done
+}
+#+END_SRC
+
+*** Test
+Extract the flags for "transformers-compat".
+
+#+BEGIN_SRC sh :noweb yes :exports none :results output
+<<flagsFor>>
+cd ~/temp/diagrams-lib-1.2.0.8
+cat cabbage.config | flagsFor $(versionedPackageName "transformers-compat-0.4.0.4")
+#+END_SRC
+
+#+RESULTS:
+: three
+
+Fix multiple flags in "transformers-compat".
+#+BEGIN_SRC sh :noweb yes :exports none :results output
+<<flagsFor>>
+cd ~/temp/diagrams-lib-1.2.0.8/.cabbages/transformers-compat-0.4.0.4
+fixAllFlags "three -mtl"
+#+END_SRC
+
+** Distribute flags to the targeted cabbages
+Read in a ~cabbage.config~ file, and copy the relevant parts of the
+file to each named dependency in the ~.cabbages~ directory.
+
+There is only /one/ ~flags~ stanza in a ~cabbage.config~ file. Once
+we've finished processing it, we can quit.
+
+#+NAME: sowFlagsAwk
+#+BEGIN_SRC awk
+BEGIN { FS = ":"; inFlags = 0;}
+/flags:/ { inFlags = 1; }
+/^[^[:space:]]/ { if(inFlags == 2) { exit 0; } }
+{
+  if(inFlags == 1) {
+    inFlags = 2;
+  } else if(inFlags == 2) {
+    gsub(/^[[:space:]]*/,"",$1);
+    cmd = sprintf("find .cabbages -maxdepth 1 -name '%s-[[:digit:].]*'", $1);
+    if( (cmd | getline versionedName) ) {
+      flags = sprintf("flags:\n  %s:%s\n", $1, $2);
+      cmd = sprintf("echo '%s' > .cabbages/$(basename \"%s\")/cabbage.config", flags, versionedName);
+      system(cmd);
+    } else {
+      # print "Ignoring flag for unknown dependency:", $1
+    }
+  }
+}
+#+END_SRC
+
+#+NAME: sowFlags
+#+BEGIN_SRC sh :noweb yes :tangle cabbage :exports code
+
+# Takes a cabbage.config file and distributes subset cabbage.config
+# files to directories in the .cabbages directory on an as-needed
+# basis. Specifically, the flags for a named package will be copied
+# into a cabbage.config file in that package's directory.
+sowFlags() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+<<sowFlagsAwk>>
+EOF
+  awk "$AWK"
+}
+#+END_SRC
+
+#+BEGIN_SRC sh :results output :noweb yes
+<<sowFlags>>
+cd ~/temp/diagrams-lib-1.2.0.8
+cat cabbage.config | sowFlags
+#+END_SRC
+
+#+RESULTS:
+: Ignoring flag for unknown dependency: flingle
+
+
 * Creating a derivation for each dependency
 Our derivations are actually not that complicated from a Nix
 perspective because we aren't using much Nix machinery. Instead, we
@@ -595,7 +816,7 @@ BEGIN {
     }
     firstLine = 0;
   } else {
-    if(!globallyInstalled[$1]) {
+    if(!($1 in globallyInstalled)) {
       print($1);
     }
   }
@@ -934,13 +1155,12 @@ mkCabbage() {
   if [ "$3" = true ]; then
     # This is /the/ downstream package
 
-    # We will need the standard callPackage function and cabbageOverrides
-    FROZENUPSTREAM="callPackage, mkCabbageOverrides"
+    # We will need the standard callPackage function
+    FROZENUPSTREAM="callPackage"
 
     # We will define the frozenCabbages attribute
     IFS=$'\n' read -r -d '' FROZENDEF <<EOF
 frozenCabbages = rec {
-      cabbageOverrides = mkCabbageOverrides frozenCabbages;
 $(callCabbages DEPNAMES[@] DEPS[@])
     };
 EOF
@@ -950,14 +1170,17 @@ EOF
     # standard cabal workflow (e.g. tools like ghc-mod).
     mkdir -p .cabal-sandbox/lib/"$1"
     LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/";
+
+    # We will give Nix an sdist of this package as the source path
+    cabal sdist -v0
   else
     # This is an upstream package (dependency)
     FROZENUPSTREAM="frozenCabbages"
   fi
-
+  
   local SYNOPSIS=$(cabal info ./*.cabal \
                    | grep "Synopsis:" \
-                   | sed 's/[[:space:]]*Synopsis:[[:space:]]*\(.*\)/\1/')
+                   | sed -e 's/[[:space:]]*Synopsis:[[:space:]]*\(.*\)/\1/'  -e 's/"/\\"/g')
 
   # Now we build up the Nix expression
   IFS=$'\n' read -r -d '' NIX <<EOF
@@ -968,23 +1191,26 @@ let cabalTmp = "cabal --config-file=./.cabal/config";
                      p = pkg.outPath;
                      libPath = ".cabal-sandbox/lib/$1";
                      pkgPath = ".cabal-sandbox/$1-packages.conf.d";
-                 in ''ln -s \${p}/\${libPath}/\${nm} \$out/\${libPath}/
-                      ln -s \${p}/\${pkgPath}/\${nm}*.conf \$out/\${pkgPath}/
+                 in ''ln -sFf \${p}/\${libPath}/* \$out/\${libPath}/
+                      ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
                     '';
     mkSetupCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
                           p = pkg.outPath;
                       in "$LINKSANDBOX\n";
 in
-(lib.makeOverridable stdenv.mkDerivation rec {
+stdenv.mkDerivation rec {
   name = "haskell-$2";
-  src = ./.;
+  src = $(if [ "$3" = true ]; then 
+            echo "./dist/$2.tar.gz"
+          else 
+            echo "./."
+          fi);
   cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
   buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps;
 
   # Build the commands to merge package databases
   cmds = lib.strings.concatStrings (map mkCmd cabbageDeps);
   setupCmds = lib.strings.concatStrings (map mkSetupCmd cabbageDeps);
-  cabalFlags = "";
 
   setup = builtins.toFile "setup.sh" ''
     <<updateTimeStamps>>
@@ -998,15 +1224,19 @@ in
     source \$stdenv/setup
     mkdir \$out
 
-    cp -R \$src/* .
-    #*/
+    if [ -d "\$src" ]; then
+      cp -R "\$src"/* .
+      #*/
+    else
+      tar xf "\$src" --strip=1
+    fi
 
     \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init
     mkdir -p \$out/.cabal-sandbox/lib/$1
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$cabalFlags
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure
     echo "Building..."
     \${cabalTmp} --builddir=\$out/dist build -v0
     \${cabalTmp} --builddir=\$out/dist copy
@@ -1016,17 +1246,28 @@ in
   meta = {
     description = "$SYNOPSIS";
   };
-}).override (let myAttr = (builtins.parseDrvName "$2").name;
-             in lib.attrByPath [ myAttr ] {} frozenCabbages.cabbageOverrides)
+}
 EOF
 
   echo "$NIX" > default.nix
 }
 
 prepCabbage() {
+  if [ -f cabbage.config ]; then
+    local MYNAME=$(versionedPackageName "$d")
+    local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
+    if ! [ "$FLAGS" = "" ]; then
+      echo "Applying flags \"$FLAGS\" to $MYNAME"
+      fixAllFlags "$FLAGS"
+    fi
+  fi
   cabal freeze > /dev/null
-  mv cabal.config cabal.config.bak
-  updateConstraintsAwk ../../cabal.config cabal.config.bak > cabal.config
+  if ! [ $? -eq 0 ]; then
+    freezeWithConstraints ../../cabal.config
+  else
+    mv cabal.config cabal.config.bak
+    updateConstraintsAwk ../../cabal.config cabal.config.bak > cabal.config
+  fi
   mkCabbage "$dbPath" "$d" false
 }
 
@@ -1034,10 +1275,29 @@ prepCabbage() {
 # be built. If the flag is true, then the build-depends of all targets
 # are consolidated and considered when determining a build plan.
 mkCabbages() {
+  local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
+  if [ "$NUMCABALS" -gt 1 ]; then
+    echo "Error: Found multiple cabal files in $(pwd)!"
+    exit 1
+  fi
+  local CABAL=$(basename "$(ls ./*.cabal)")
+  if [ -f cabbage.config ]; then
+    local MYVNAME=$(getMyFullName)
+    local MYNAME=$(versionedPackageName "$MYVNAME")
+    local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
+    if ! [ "$FLAGS" = "" ]; then
+      echo "Applying flags \"$FLAGS\" to the current project"
+      cp "$CABAL" "$CABAL.cabbage.bak"
+      fixAllFlags "$FLAGS"
+    fi
+  fi
   if [ "$1" = true ]; then
     freezeConsolidatedCabal ./*.cabal
   else
     cabal freeze
+  fi
+  if [ -f "$CABAL.cabbage.bak" ]; then
+    mv "$CABAL.cabbage.bak" "$CABAL"
   fi
   local RES=$?
   if [ $RES -ne 0 ]; then
@@ -1048,6 +1308,9 @@ mkCabbages() {
   local dbPath=$(getPackageDBPath)
   local deps=($(getDependencies cabal.config))
   getDependencySources
+  if [ -f cabbage.config ]; then
+    cat cabbage.config | sowFlags
+  fi
   pushd .cabbages > /dev/null
   for d in "${deps[@]}"; do
     if ! globallyInstalled $d; then
@@ -1070,6 +1333,11 @@ mkCabbages() {
 <<getAddSource>>
 <<findIndex>>
 <<getDependencySources>>
+<<dummyCabalLibrary>>
+<<isolateConstraints>>
+<<buildDependsReformat>>
+<<pinBuildDepends>>
+<<freezeWithConstraints>>
 <<updateConstraintsAwk>>
 
 (cd CabbageDown && mkCabbages)
@@ -1077,155 +1345,37 @@ mkCabbages() {
 
 #+RESULTS:
 : Resolving dependencies...
-: Froze downstream package at /Users/acowley/Documents/Projects/Nix/CabbageDown
+: Froze downstream package at /Users/acowley/Documents/Projects/Cabbage/CabbageDown
 : Getting add-source dependency: TestCabbage-0.1.0.0
-: Getting dependency: colour-2.3.3
+: Using existing source dist of colour-2.3.3
 : Making cabbage: TestCabbage-0.1.0.0
+: Preparing /Users/acowley/Documents/Projects/Cabbage/CabbageDown/.cabbages/TestCabbage-0.1.0.0
+: Resolving dependencies...
 : Making cabbage: colour-2.3.3
+: Preparing /Users/acowley/Documents/Projects/Cabbage/CabbageDown/.cabbages/colour-2.3.3
 
 * Multiple Targets
 
 We sometimes want ~cabal freeze~ to consider the dependencies of all
 targets, including test and benchmark suites. We accomplish this by
-producing a dummy ~.cabal~ file with a build-depends stanza that
-consolidates all dependnecies, then run ~cabal freeze~ against that.
+producing an alternate ~.cabal~ file where benchmark and test suites
+have been changed to executable build targets, then running ~cabal
+freeze~ against that.
 
-** Consolidate build-depends
-
-#+NAME: consolidateBuildDepends
+#+NAME: testBenchExecutable
 #+BEGIN_SRC sh :exports code
-
-# Consolidate the build-depends stanzas from every target in the given
-# .cabal file.
-consolidateBuildDepends() {
-  local MYNAME=$(grep "^name:" "$1" | sed 's/name:[[:space:]]*\([[:alpha:]].*$\)/\1/')
-  
-  # Print out any "build-depends" stanzas we find. These are delimited
-  # by indentation.
-  read -r -d '' BUILDDEPS<<'EOF'
-BEGIN { buildDep = 0; }
-/[[:space:]]*build-depends: /{ 
-  buildDep = 1;
-  match($0, /^[[:space:]]*/);
-  indentation = RLENGTH;
-  print $0;
-}
-{
-  if(buildDep == 1) {
-    buildDep = 2;
-  } else if(buildDep == 2) {
-    match($0, /^[[:space:]]*/);
-    if(RLENGTH > indentation) {
-      print $0;
-    } else {
-      buildDep = 0;
-    }
-  }
-}
-EOF
-
-  # Given a list of build-depends with the format "package, versions",
-  # deal with potential duplicates in the sequence by choosing the first
-  # non-empty version range encountered for each package name. Prints
-  # out a merged build-depends section.
-  
-  read -r -d '' MERGE<<EOF
-BEGIN { FS=","; count = 0; }
-{
-  if(\$1 == "$MYNAME") {
-  } else if(NF==1 && !(\$1 in constraints)) {
-    count++;
-    constraints[\$1] = "";
-  } else if(NF==2) {
-    if(!(\$1 in constraints)) {
-      constraints[\$1] = \$2;
-      count++;
-    } else if(constraints[\$1] == "") {
-      constraints[\$1] = \$2;
-    }
-  }
-}
-END {
-  i = 0;
-  for(c in constraints) {
-    if(i == 0) {
-      printf("  build-depends: %s%s", c, constraints[c]);
-    } else {
-      printf("                 %s%s", c, constraints[c]);
-    }
-    i++;
-    if(i < count) {
-      printf(",\n");
-    } else {
-      printf("\n");
-    }
-  }
-}
-EOF
-
-  # Get all build-depends stanzas, remove the "build-depends:" string,
-  # commas between dependencies, and line comments. Then, remove leading
-  # spaces and reformat each dependency as "package, versions", and pipe
-  # into the AWK merge program.
-  (awk "$BUILDDEPS" | \
-  sed -e 's/^[[:space:]]*build-depends:[[:space:]]*//' -e 's/,/\
-  /g' -e 's/--.*$//' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]/, /' | \
-  awk "$MERGE") < "$1"
+testBenchExecutable() {
+  sed -e 's/^[Tt]est-[Ss]uite[[:space:]]*\(.*\)$/executable test-suite-\1/' \
+      -e 's/^[Bb]enchmark[[:space:]]*\(.*\)$/executable benchmark-\1/' \
+      -e 's/^[[:space:]]*[Tt]ype:.*$//'
 }
 #+END_SRC
-
-*** Test
-#+BEGIN_SRC sh :exports none :noweb yes :results output
-<<consolidateBuildDepends>>
-consolidateBuildDepends ~/Documents/Projects/Hocl/Hocl.cabal
-#+END_SRC
-
-#+RESULTS:
-#+begin_example
-  build-depends: base >=4.6 && <4.8,
-                 containers,
-                 text >= 1.1 && < 1.3,
-                 mtl,
-                 linear >= 1.10 && < 1.11,
-                 wl-pprint-text >= 1.1 && < 1.2,
-                 primitive,
-                 lens,
-                 semigroups >= 0.14 && < 0.16,
-                 transformers >= 0.4 && < 0.5,
-                 tasty-hunit,
-                 vector,
-                 ghc-prim,
-                 tagged,
-                 tasty
-#+end_example
-
-Are self-dependencies going to be a problem? Possibly. Probably best
-to just filter them out of the dummy consolidated cabal file.
 
 ** Consolidated Cabal
 
 #+NAME: freezeConsolidatedCabal
 #+BEGIN_SRC sh :tangle cabbage :noweb yes :exports code
-<<consolidateBuildDepends>>
-
-# Takes a .cabal file name and produces a cabal file with a
-# build-depends stanza including the dependencies for every target of
-# the original cabal file for freezing purposes.
-consolidatedTargetsCabal() {
-  local CABAL
-  read -r -d '' CABAL<<'EOF'
-name:               Dummy
-version:            0.1.0.0
-build-type:         Simple
-cabal-version:      >=1.10
-
-library
-  exposed-modules:
-EOF
-
-  echo "$CABAL"
-  consolidateBuildDepends "$1"
-}
+<<testBenchExecutable>>
 
 freezeConsolidatedCabal() {
   local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
@@ -1234,7 +1384,7 @@ freezeConsolidatedCabal() {
     exit 1
   fi
   local REALCABAL=$(basename "$(ls ./*.cabal)")
-  consolidatedTargetsCabal "$1" > cabbageDummy.cabal
+  (cat "$REALCABAL" | testBenchExecutable) > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
   cabal freeze
   mv cabbageBackup.bak "$REALCABAL"
@@ -1257,33 +1407,10 @@ defaultShell() {
   local NIX
   IFS=$'\n' read -r -d '' NIX <<'EOF'
 with import <nixpkgs> {};
-let myGHC = ghc.ghc784;
-    flagTransformersCompat = frozen:
-      if frozen ? transformers-compat
-      then let v = if frozen ? transformers
-                   then (builtins.parseDrvName frozen.transformers.name).version
-                   else if lib.versionOlder myGHC.version "7.8.5"
-                        then "0.3.0.0"
-                        else "0.4.0.0";
-               flag = 
-                 if lib.versionAtLeast v "0.2"
-                 then if lib.versionOlder v "0.3"
-                      then "-f two"
-                      else if lib.versionOlder v "0.4"
-                           then "-f three"
-                           else ""
-                 else "";
-               flagged = if flag == ""
-                         then {}
-                         else { cabalFlags = flag; };
-           in { transformers-compat = flagged; }
-      else {};
-    mkCabbageOverrides = frozen: flagTransformersCompat frozen;
-in callPackage ./default.nix {
-     inherit mkCabbageOverrides;
-     haskellBuildTools = [ myGHC
-                           haskellPackages.cabalInstall_1_20_0_6
-                           haskellPackages.happy ];
+callPackage ./default.nix {
+   haskellBuildTools = [ ghc.ghc784
+                         haskellPackages.cabalInstall_1_20_0_6
+                         haskellPackages.happy ];
 }
 EOF
   echo "$NIX"
@@ -1470,14 +1597,15 @@ cabbage run. However, having it cached locally would mean we could
 generate nix files without any network activity.
 ** TODO Cache cabbages
 Right now, we always download a package and we always generate a
-cabbage. What we could do is cache the downloaded source, then do the
-cabal.config intersection and check if we've got an equivalent
-default.nix in the cache. It's not clear how much time this would
-save. We need to do the constraint intersection no matter what. We
-could hash the constraint intersection with the package's .cabal file
-and see if we've already generated an equivalent cabbage. This would
-just save us the trouble of producing the actual .nix files, but much
-of the work would have already been done.
+cabbage. What we could do is cache the downloaded source /and/ the
+result of ~cabal freeze~, then do the cabal.config intersection and
+check if we've got an equivalent default.nix in the cache. It's not
+clear how much time this would save. We need to do the constraint
+intersection no matter what. We could hash the constraint intersection
+with the package's .cabal file and see if we've already generated an
+equivalent cabbage. This would just save us the trouble of producing
+the actual .nix files, but much of the work would have already been
+done.
 ** TODO Produce a cabbage from a package's cabal file only
 We can download just the ~.cabal~ file with something like,
 
@@ -1491,12 +1619,5 @@ comes to add-sourced dependencies. If we delay copying the source,
 then we need to somehow remember how to get it. The current approach
 gets the source right when we're working out from where to get the
 ~.cabal~ file for the dependency.
-** TODO Support test and benchmark stanzas
-Newer versions of ~cabal-install~ can take ~--enable-tests~ and/or
-~--enable-benchmarks~ flags for the ~freeze~ command. We will need to
-figure out /how/ to pass these flags to ~mkCabbages~ where they are
-needed. But note that they are (probably?) only needed for the
-top-level downstream package. They are also /not/ supported by
-~cabal-install-1.20.0.6~ so relying on them will have to wait.
 ** TODO Loosen up constraint parsing
 We might as well be a tiny bit flexible in parsing these lines.
