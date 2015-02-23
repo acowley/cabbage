@@ -181,9 +181,9 @@ freezeWithConstraints() {
   return $OK
 }
 
-# Versioned package name. Remove the version number from a versioned
+# Unversion package name. Remove the version number from a versioned
 # package name.
-versionedPackageName() {
+unversionPackageName() {
   sed 's/\(.*\)-[-[:digit:].]*$/\1/' <<< "$1"
 }
 
@@ -322,7 +322,10 @@ EOF
 
 # Get the package in this directory's full versioned name
 getMyFullName() {
-  cabal info ./*.cabal | head -n 1 | sed 's/* \([^[:space:]]*\).*/\1/'
+  local CABAL=$(ls ./*.cabal)
+  { (cat "$CABAL" | grep "^name:" | sed 's/^name:[[:space:]]*\(.*\)$/\1/');
+    (cat "$CABAL" | grep "^version:" | sed 's/^version:[[:space:]]*\(.*\)$/\1/'); } \
+  | tr '\n' '-' | sed 's/-$//'
 }
 
 # Takes a directory name, and returns the package that can be built
@@ -544,7 +547,7 @@ EOF
 
 prepCabbage() {
   if [ -f cabbage.config ]; then
-    local MYNAME=$(versionedPackageName "$d")
+    local MYNAME=$(unversionPackageName "$d")
     local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
     if ! [ "$FLAGS" = "" ]; then
       echo "Applying flags \"$FLAGS\" to $MYNAME"
@@ -573,7 +576,7 @@ mkCabbages() {
   local CABAL=$(basename "$(ls ./*.cabal)")
   if [ -f cabbage.config ]; then
     local MYVNAME=$(getMyFullName)
-    local MYNAME=$(versionedPackageName "$MYVNAME")
+    local MYNAME=$(unversionPackageName "$MYVNAME")
     local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
     if ! [ "$FLAGS" = "" ]; then
       echo "Applying flags \"$FLAGS\" to the current project"
