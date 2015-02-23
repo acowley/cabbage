@@ -1273,6 +1273,7 @@ stdenv.mkDerivation rec {
       tar xf "\$src" --strip=1
     fi
 
+    chmod -R u+w .
     \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init
     mkdir -p \$out/.cabal-sandbox/lib/$1
     eval "\$cmds"

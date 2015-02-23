@@ -393,6 +393,13 @@ getPackageDBPath() {
   fi
 }
 
+getSynopsis() {
+  local CABAL=$(ls ./*.cabal)
+  cat "$CABAL" | sed -n '/^[Ss]ynopsis/,/^[^[:space:]]/ p' | sed '$d' \
+  | sed -e 's/^[Ss]ynopsis:[[:space:]]*//' -e 's/^[[:space:]]*//' -e 's/"/\\"/g' \
+  | tr '\n' ' '
+}
+
 # Define an attribute for each package. Takes an array of attribute
 # names, and an array of corresponding directory names that are home
 # to Nix package definitions (these are all in the .cabbages
@@ -452,10 +459,8 @@ EOF
     # This is an upstream package (dependency)
     FROZENUPSTREAM="frozenCabbages"
   fi
-  
-  local SYNOPSIS=$(cabal info ./*.cabal \
-                   | grep "Synopsis:" \
-                   | sed -e 's/[[:space:]]*Synopsis:[[:space:]]*\(.*\)/\1/'  -e 's/"/\\"/g')
+
+  local SYNOPSIS=$(getSynopsis)
 
   # Now we build up the Nix expression
   IFS=$'\n' read -r -d '' NIX <<EOF
@@ -524,6 +529,7 @@ stdenv.mkDerivation rec {
       tar xf "\$src" --strip=1
     fi
 
+    chmod -R u+w .
     \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init
     mkdir -p \$out/.cabal-sandbox/lib/$1
     eval "\$cmds"
