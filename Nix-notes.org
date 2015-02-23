@@ -20,8 +20,8 @@ put it on your ~PATH~, or invoke it however you prefer. It is a
 regular bash script that calls out to ~sed~, ~awk~, ~grep~, etc.
 
 ** Development Workflow
-Create a sandbox and a cabal file. Run ~cabbage~ in your project's
-root directory. Then run,
+Run ~cabbage~ in your project's root directory (containing the
+project's ~.cabal~ file). Then run,
 
 #+BEGIN_SRC sh :exports none
 nix-shell --run 'sh $setup'
@@ -31,9 +31,28 @@ to make sure all dependencies are built and linked into your
 sandbox. At this point, you can ~cabal configure~ etc., outside of
 ~nix-shell~ and work as usual.
 
+*** Test and Benchmark Suites
 If you have benchmark or test suites, you will want to run ~cabbage
 -a~ to indicate that /all/ targets should be considered when gathering
 dependencies.
+
+*** Flags
+If there are flags that should be set for the package you are building
+or any of its dependencies, you can create a file ~cabbage.config~
+that looks like this,
+
+#+BEGIN_EXAMPLE
+flags:
+  MyPackage: demos -silly
+  transformers-compat: three
+#+END_EXAMPLE
+
+This file will cause dependencies in your project guarded by the
+~demos~ flag to be pulled in, while the negative setting of ~silly~
+will cause Cabal to treat that flag as ~False~. Assuming that
+~transformers-compat~ is a transitive dependency of this package, it
+will be built with the ~three~ flag which is needed when your project
+ultimately must build against ~transformers < 4~.
 
 ** Working with other packages
 You can also pass ~cabbage~ a path to a ~.cabal~ file or give it the
