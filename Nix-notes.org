@@ -595,9 +595,9 @@ looks somewhat like a ~cabal.config~ file.
 #+NAME: flagsFor
 #+BEGIN_SRC sh :tangle cabbage :exports code
 
-# Versioned package name. Remove the version number from a versioned
+# Unversion package name. Remove the version number from a versioned
 # package name.
-versionedPackageName() {
+unversionPackageName() {
   sed 's/\(.*\)-[-[:digit:].]*$/\1/' <<< "$1"
 }
 
@@ -664,7 +664,7 @@ Extract the flags for "transformers-compat".
 #+BEGIN_SRC sh :noweb yes :exports none :results output
 <<flagsFor>>
 cd ~/temp/diagrams-lib-1.2.0.8
-cat cabbage.config | flagsFor $(versionedPackageName "transformers-compat-0.4.0.4")
+cat cabbage.config | flagsFor $(unversionPackageName "transformers-compat-0.4.0.4")
 #+END_SRC
 
 #+RESULTS:
@@ -1254,7 +1254,7 @@ EOF
 
 prepCabbage() {
   if [ -f cabbage.config ]; then
-    local MYNAME=$(versionedPackageName "$d")
+    local MYNAME=$(unversionPackageName "$d")
     local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
     if ! [ "$FLAGS" = "" ]; then
       echo "Applying flags \"$FLAGS\" to $MYNAME"
@@ -1283,7 +1283,7 @@ mkCabbages() {
   local CABAL=$(basename "$(ls ./*.cabal)")
   if [ -f cabbage.config ]; then
     local MYVNAME=$(getMyFullName)
-    local MYNAME=$(versionedPackageName "$MYVNAME")
+    local MYNAME=$(unversionPackageName "$MYVNAME")
     local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
     if ! [ "$FLAGS" = "" ]; then
       echo "Applying flags \"$FLAGS\" to the current project"
