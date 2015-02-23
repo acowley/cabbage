@@ -1134,6 +1134,29 @@ CWD=\$(pwd)
 (cd \$src && cabal --config-file="\$CWD"/.cabal/config sdist --output-directory="\$CWD")
 #+END_SRC
 
+
+**** Helper
+
+#+NAME: getSynopsis
+#+BEGIN_SRC sh :exports code :tangle cabbage
+getSynopsis() {
+  local CABAL=$(ls ./*.cabal)
+  cat "$CABAL" | sed -n '/^[Ss]ynopsis/,/^[^[:space:]]/ p' | sed '$d' \
+  | sed -e 's/^[Ss]ynopsis:[[:space:]]*//' -e 's/^[[:space:]]*//' -e 's/"/\\"/g' \
+  | tr '\n' ' '
+}
+#+END_SRC
+
+***** Test
+#+BEGIN_SRC sh :noweb yes :results output
+<<getSynopsis>>
+cd ~/Documents/Projects/Frames 
+getSynopsis
+#+END_SRC
+
+#+RESULTS:
+: Data frames For working with tabular data files 
+
 **** The bash code
 
 #+NAME: mkCabbage
@@ -1198,10 +1221,8 @@ EOF
     # This is an upstream package (dependency)
     FROZENUPSTREAM="frozenCabbages"
   fi
-  
-  local SYNOPSIS=$(cabal info ./*.cabal \
-                   | grep "Synopsis:" \
-                   | sed -e 's/[[:space:]]*Synopsis:[[:space:]]*\(.*\)/\1/'  -e 's/"/\\"/g')
+
+  local SYNOPSIS=$(getSynopsis)
 
   # Now we build up the Nix expression
   IFS=$'\n' read -r -d '' NIX <<EOF
