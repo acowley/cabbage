@@ -37,6 +37,10 @@ flags:
 This will set flag `foo` to `True` and flag `bar` to `False` for the
 package `PackageName`.
 
+*NOTE*: The `cabbage` tool will not overwrite a `shell.nix` if one
+exists, so, if you want `cabbage` to generate a fresh default
+`shell.nix`, delete the old one first.
+
 See the
 [overview](https://github.com/acowley/cabbage/blob/master/Nix-notes.org#overview)
 section of the source code for more information.
@@ -74,20 +78,6 @@ name, version, and source code, but also by the versions of
 dependencies they are built against. All of the distinct ways of
 producing a compiled library are kept in the Nix store, but truly
 redundant recompilations are avoided.
-
-Customization
----
-
-Currently, the way to customize how packages are built is best done by
-using `cabal get` to obtain a copy of the source code of the package
-you want to build if you do not already have it. Run `cabbage` in the
-directory with the `.cabal` file, then take a look at the generated
-`shell.nix` to see where customization (e.g. setting cabal flags) can
-be added.
-
-*NOTE*: The `cabbage` tool will not overwrite a `shell.nix` if one
-exists, so, if you want `cabbage` to generate a fresh default
-`shell.nix`, delete the old one first.
 
 The Name
 ---
