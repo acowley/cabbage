@@ -1664,3 +1664,12 @@ gets the source right when we're working out from where to get the
 ~.cabal~ file for the dependency.
 ** TODO Loosen up constraint parsing
 We might as well be a tiny bit flexible in parsing these lines.
+** TODO Deal with Setup.hs dependencies
+Some packages (e.g. lhs2tex) have custom Setup programs that have
+their own dependencies. These packages can't be configured in a bare
+sandbox. There are at least two reasonable alternatives:
+
+- Provide an option for cabbage to install and link a dependency into
+  the current sandbox
+- Provide a section of the cabbage.config file in which we can specify
+  Setup dependencies.
