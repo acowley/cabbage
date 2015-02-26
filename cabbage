@@ -451,10 +451,20 @@ EOF
     # dependencies in the nix store so the user can continue using a
     # standard cabal workflow (e.g. tools like ghc-mod).
     mkdir -p .cabal-sandbox/lib/"$1"
-    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${p}/.cabal-sandbox/lib/$1/\${nm}/* $(pwd)/.cabal-sandbox/lib/$1/\${nm} && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/\${nm}*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/";
+    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/ && ln -sFf \${p}/.cabal-sandbox/lib/$1/* $(pwd)/.cabal-sandbox/lib/ && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/";
 
-    # We will give Nix an sdist of this package as the source path
-    cabal sdist -v0
+    # We create a dummy sdist file so that the src attribute on the
+    # downstream package's nix expression is a file, even if its
+    # contents are currently bogus. This is done so that Nix can
+    # evaluate the expression and install dependencies, without which
+    # the configure phase (run in order to produce the sdist) of the
+    # downstream package can fail due to missing dependencies.
+    if ! [ -d "./dist" ]; then
+      mkdir dist
+    fi
+    if ! [ -f "./dist/$2.tar.gz" ]; then
+      touch "./dist/$2.tar.gz"
+    fi
   else
     # This is an upstream package (dependency)
     FROZENUPSTREAM="frozenCabbages"
@@ -482,7 +492,7 @@ stdenv.mkDerivation rec {
   name = "haskell-$2";
   src = $(if [ "$3" = true ]; then 
             echo "./dist/$2.tar.gz"
-          else 
+          else
             echo "./."
           fi);
   cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
@@ -518,6 +528,7 @@ stdenv.mkDerivation rec {
     OLDTIMESTAMPS=\$(cat .cabal-sandbox/add-source-timestamps)
     updateTimeStamps "$1" SRCS[@] "\$OLDTIMESTAMPS" > .cabal-sandbox/add-source-timestamps
   '';
+
   builder = builtins.toFile "builder.sh" ''
     source \$stdenv/setup
     mkdir \$out
@@ -530,7 +541,7 @@ stdenv.mkDerivation rec {
     fi
 
     chmod -R u+w .
-    \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init
+    \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init -v0
     mkdir -p \$out/.cabal-sandbox/lib/$1
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
@@ -714,7 +725,7 @@ EOF
 }
 
 showHelp() {
-  echo "Usage: cabbage [-a] [packageName]"
+  echo "Usage: cabbage [-a] [-b] [packageName]"
   echo ""
   echo "- Run cabbage in a directory with a .cabal file to build Nix"
   echo "  expressions for the current package and all of its dependencies."
@@ -723,10 +734,10 @@ showHelp() {
   echo "  the sandbox. "
   echo "  If no sandbox is in the current directory, a new one will be created."
   echo ""
-  echo "- The '-a' option will additionally link the dependencies of all "
-  echo "  build targets of the current .cabal file. Without this option, "
-  echo "  dependencies of test and benchmark suites won't be installed or "
-  echo "  linked into the sandbox"
+  echo "- The '-a' option will additionally link the dependencies of any "
+  echo "  benchmark and test suites. "
+  echo ""
+  echo "- The '-b' option will build the project with nix-build."
   echo ""
   echo "- If cabbage is given a path to a .cabal file or a package name "
   echo "  (with optional version suffix) available on hackage, that package "
@@ -738,9 +749,10 @@ showHelp() {
 
 ALLTARGETS=false
 
-while getopts ":ah" opt; do
+while getopts ":abh" opt; do
   case "$opt" in
     a) ALLTARGETS=true;;
+    b) cabal configure && cabal sdist -v0 && nix-build shell.nix; exit 0;;
     h|\?) showHelp; exit 0;;
   esac
 done
