@@ -1681,3 +1681,6 @@ gets the source right when we're working out from where to get the
 ~.cabal~ file for the dependency.
 ** TODO Loosen up constraint parsing
 We might as well be a tiny bit flexible in parsing these lines.
+** TODO Add source dependencies for add source dependencies
+We can't run ~cabal freeze~ on an add-source dependency that depends
+on another add-source dependency.
