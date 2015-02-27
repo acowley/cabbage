@@ -438,7 +438,7 @@ We first use sed to isolate the constraint lines.
 
 # Takes a configuration file and extracts the "constraints" section.
 isolateConstraints() {
-  sed -n '/^constraints/,/^[^[:space:]]/ p' | sed -e 'n' -e '/^[^[:space:]]/,$ d'
+  sed -n '/^[Cc]onstraints/,/^[^[:space:]]/ { /^[Cc]onstraints/p; /^[[:space:]]/p; }'
 }
 
 isolateAndCleanupConstraints() {
