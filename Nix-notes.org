@@ -31,6 +31,10 @@ to make sure all dependencies are built and linked into your
 sandbox. At this point, you can ~cabal configure~ etc., outside of
 ~nix-shell~ and work as usual.
 
+If the above ~nix-shell~ command gives you an error (e.g. with Nix
+1.8), you can try running ~nix-shell~ without any arguments, then,
+once in the shell, run ~sh "$setup"~.
+
 To build the current package with Nix, use ~cabbage -b~ instead of
 ~nix-build shell.nix~. The former is a short wrapper around the
 latter. It simply runs ~cabal configure~ and ~cabal sdist~ before
