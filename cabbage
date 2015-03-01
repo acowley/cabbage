@@ -2,7 +2,7 @@
 
 # List directories of added sources
 getAddedSources() {
-  echo "$1" | sed '1,/^$/ d' | sed '/^$/,$ d'
+  sed '1,/^$/ d' | sed '/^$/,$ d'
 }
 
 # Takes two sets of constraints separates by a line containing only
@@ -323,8 +323,8 @@ EOF
 # Get the package in this directory's full versioned name
 getMyFullName() {
   local CABAL=$(ls ./*.cabal)
-  { (cat "$CABAL" | grep "^[Nn]ame:" | sed 's/^[Nn]ame:[[:space:]]*\(.*\)$/\1/');
-    (cat "$CABAL" | grep "^[Vv]ersion:" | sed 's/^[Vv]ersion:[[:space:]]*\(.*\)$/\1/'); } \
+  { (cat "$CABAL" | tr -d '\r' | grep "^[Nn]ame:" | sed 's/^[Nn]ame:[[:space:]]*\(.*\)$/\1/');
+    (cat "$CABAL" | tr -d '\r' | grep "^[Vv]ersion:" | sed 's/^[Vv]ersion:[[:space:]]*\(.*\)$/\1/'); } \
   | tr '\n' '-' | sed 's/-$//'
 }
 
@@ -358,8 +358,7 @@ findIndex() {
 # directory. This handles add-sourced dependencies, or those that
 # "cabal get" can get (i.e. from hackage).
 getDependencySources() {
-  local LISTEDSOURCES="$(cabal sandbox list-sources))"
-  local ADDEDSOURCEDIRS=($(getAddedSources "$LISTEDSOURCES"))
+  local ADDEDSOURCEDIRS=($(cabal sandbox list-sources | getAddedSources))
   local ADDEDSOURCEPACKAGES
   local i
   for i in "${!ADDEDSOURCEDIRS[@]}"; do

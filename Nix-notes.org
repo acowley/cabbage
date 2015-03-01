@@ -897,8 +897,8 @@ cabal get $1 -d .cabbages
 # Get the package in this directory's full versioned name
 getMyFullName() {
   local CABAL=$(ls ./*.cabal)
-  { (cat "$CABAL" | grep "^[Nn]ame:" | sed 's/^[Nn]ame:[[:space:]]*\(.*\)$/\1/');
-    (cat "$CABAL" | grep "^[Vv]ersion:" | sed 's/^[Vv]ersion:[[:space:]]*\(.*\)$/\1/'); } \
+  { (cat "$CABAL" | tr -d '\r' | grep "^[Nn]ame:" | sed 's/^[Nn]ame:[[:space:]]*\(.*\)$/\1/');
+    (cat "$CABAL" | tr -d '\r' | grep "^[Vv]ersion:" | sed 's/^[Vv]ersion:[[:space:]]*\(.*\)$/\1/'); } \
   | tr '\n' '-' | sed 's/-$//'
 }
 
