@@ -101,7 +101,7 @@ pulls out the directory names.
 
 # List directories of added sources
 getAddedSources() {
-  echo "$1" | sed '1,/^$/ d' | sed '/^$/,$ d'
+  sed '1,/^$/ d' | sed '/^$/,$ d'
 }
 #+END_SRC
 
@@ -117,7 +117,7 @@ Source dependencies registered in the current sandbox
 To unregister source dependencies, use the 'sandbox delete-source' command.
 EOF
 
-getAddedSources "$LISTED"
+echo "$LISTED" | getAddedSources
 #+END_SRC
 
 #+RESULTS:
@@ -964,7 +964,7 @@ package in each directory.
 <<getAddSource>>
 
 LISTEDSOURCES="$(cd CabbageDown && cabal sandbox list-sources))"
-ADDEDSOURCEDIRS=($(getAddedSources "$LISTEDSOURCES"))
+ADDEDSOURCEDIRS=($(echo "$LISTEDSOURCES" | getAddedSources))
 
 # We want the package name of each added source.
 for i in "${!ADDEDSOURCEDIRS[@]}"; do
@@ -988,8 +988,7 @@ available from hackage via =cabal get=.
 # directory. This handles add-sourced dependencies, or those that
 # "cabal get" can get (i.e. from hackage).
 getDependencySources() {
-  local LISTEDSOURCES="$(cabal sandbox list-sources))"
-  local ADDEDSOURCEDIRS=($(getAddedSources "$LISTEDSOURCES"))
+  local ADDEDSOURCEDIRS=($(cabal sandbox list-sources | getAddedSources))
   local ADDEDSOURCEPACKAGES
   local i
   for i in "${!ADDEDSOURCEDIRS[@]}"; do
