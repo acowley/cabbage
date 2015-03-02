@@ -812,20 +812,21 @@ List the exact package names we need as dependencies.
 #+BEGIN_SRC sh :tangle cabbage :exports code
 # Takes a constraint line, returns a package name with version
 getDependency() {
-   sed -E 's/(constraints: |[[:space:]]*)([-_[:alpha:]]*) ==([[:digit:].]*)(,)?/\2-\3/'
+   sed 's/^[Cc]onstraints://' | sed 's/^[[:space:]]*//' \
+   | sed 's/\([-_[:alpha:]]*\) \([[:digit:].]*[,]*\)/\1-\2/'
 }
 
 # Remove packages that come with GHC
 filterOutWiredIn() {
-  grep -Ev "^(base-\d|bin-package-db-\d|rts-\d|ghc-\d|ghc-prim-\d\
-|integer-gmp-\d)"
+  grep -Ev "^(base-[[:digit:]]|bin-package-db-[[:digit:]]|rts-[[:digit:]]|ghc-[[:digit:]]|ghc-prim-[[:digit:]]\
+|integer-gmp-[[:digit:]])"
 }
 
 # Takes a cabal.config file and outputs a list of package names
 getDependencies() {
-  (isolateConstraints < "$1") | getDependency | filterOutWiredIn
+  (isolateAndCleanupConstraints < "$1") | getDependency | filterOutWiredIn
   if [ -f cabbage.config ]; then
-    (isolateConstraints < cabbage.config) | getDependency | filterOutWiredIn
+    (isolateAndCleanupConstraints < cabbage.config) | getDependency | filterOutWiredIn
   fi
 }
 
