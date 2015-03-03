@@ -1836,3 +1836,46 @@ mentions ~z~. This system dependency, ~libz~, is provided by the
 nixpkgs package, ~zlib~. It would be nice to parse these out of .cabal
 files automatically and map them to nixpkgs package names. In the
 meantime, these can be manually specified a ~cabbage.config~ file.
+** TODO Deal with required build-tools
+Two options
+
+*** Treat build-tools as ordinary dependencies
+At first blush, you'd hope we could just concatenate build-tools with
+build-depends. But a problem is that these aren't taken into account
+by ~cabal freeze~ on the downstream package, which messes things up
+when we freeze the upstream package along with its required build
+tools. What we then need to do must be split into two phases:
+
+**** Concatenate build-tools with build-depends
+Doing this properly will be quite hard as there are often multiple
+build-depends sections guarded by conditionals. A rough and ready
+heuristic would be to pick out all the build-tools, then append them
+to the first build-depends block in the .cabal file. This must be done
+before calling ~cabal freeze~.
+
+**** Concatenate build-tools of /all/ upstream packages
+The downstream package needs to depend on all needed build tools so
+that the build plan for the downstream package mentions all of the
+dependencies for these tools. This is somewhat unfortunate as it means
+that building a build-tool is tied to building a package.
+*** Special treatment for cabbage-built build-tools
+What we really want is to have unique derivations for the build-tools,
+but not intersect those build plans with the package we are building.
+
+Normally in Nix, we would just refer to an attribute and get its
+binaries on PATH when building our package. With cabbage, we don't
+have such things. What I think we want is a slight variation on the
+cabbage formula: A Nix derivation whose build plan is /not/
+intersected with the downstream package's.
+
+We filter out the [Bb]uild-[Tt]ools sections of all .cabal files. We
+get source for the tools.
+
+Note that we still want to do the thing where we consolidate a list of
+all build-tools in all dependencies. This way the dependency packages
+don't need to muck about with build-tool cabbages. We just add these
+to the haskellBuildTools array in the root project's shell.nix.
+
+Note that the ~callPackage~ calls will be in shell.nix rather than
+default.nix! Will have to make sure this works for named package
+installation, too.
