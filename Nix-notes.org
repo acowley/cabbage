@@ -653,7 +653,139 @@ updateTimeStamps "$ghcPlatform" deps[@] "$oldStampsPop"
 : [("x86_64-osx-ghc-7.8.4",[("/A/B/C",1423839326) ("/Foo/Bar Me/Baz",1423839326)])]
 : [("x86_64-osx-ghc-7.8.3", [("/A/B/C", 42)]),("x86_64-osx-ghc-7.8.4",[("/A/B/C",1423839326) ("/Foo/Bar Me/Baz",1423839326)])]
 
-* Flag overrides
+* cabbage.config
+** System dependencies
+Concatenate all ~extra-libraries~ fields in a build plan. This is a
+very rough listing as it simply filters out blocks of Cabal files
+guarded behind "if os(windows)" and "if os(solaris)".
+
+#+NAME: allExtraLibraries
+#+BEGIN_SRC sh :exports code :tangle cabbage
+
+# Print only the library target portion of a .cabal file and filter
+# out linen comments.
+isolateLibraryTarget() {
+  sed -n '/^[Ll]ibrary/,/^[^[:space:]]/ { /^[[Ll]ibrary/p; /^[[:space:]]/p; }' \
+  | sed 's/--.*$//'
+}
+
+# Remove any Cabal block guarded by an "if os(windows)" or "if
+# os(solaris)" conditional. This is a very fragile test!
+removeWindowsBlocks() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN { windowsIndent = 0; }
+{
+  if(match($0, /if os\(windows\)/)) {
+    windowsIndent = RSTART;
+  } else if(match($0, /if os\(solaris\)/)) {
+    windowsIndent = RSTART;
+  }else if(windowsIndent > 0) {
+    match($0, /^[[:space:]]*/);
+    if(RLENGTH <= windowsIndent) {
+      windowsIndent = 0;
+      print($0);
+    }
+  } else {
+    print($0);
+  }
+}
+EOF
+  awk "$AWK"
+}
+
+# Prints the extra-libraires from a cabal file iff they occur in a
+# library target.
+cabalExtraLibraries() {
+  cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
+  grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
+}
+
+# Looks in a cabal.config file to identify all dependencies, then
+# visits each of them in the .cabbages directory and prints out all
+# extra-libraries.
+allExtraLibrariesAux() {
+  local DEPS=($(getDependencies cabal.config))
+  local d
+  cabalExtraLibraries
+  (cd .cabbages && \
+   for d in "${DEPS[@]}"; do
+     (cd "$d" &&  cabalExtraLibraries)
+   done)
+}
+
+# Print out an array of possibly-needed extra-libraries.
+allExtraLibraries() {
+  local LIBS=($(allExtraLibrariesAux | sed 's/,/\
+/' | uniq))
+  echo "${LIBS[@]}"
+}
+
+# Let the user know they might need to prepare system dependencies.
+warnExtraLibraries() {
+  local LIBS=$(allExtraLibraries)
+  if [ "${#LIBS[@]}" -gt 0 ]; then
+    echo "You may need to supply system dependencies!"
+    echo "See the cabbage documentation for how to do this with "
+    echo "a 'systemDeps' section in a cabbage.config file."
+    echo "Potentially necessary extra-libraries: ${LIBS[@]}"
+    read -p "Press any key to continue..." -n 1
+    echo
+  fi
+}
+#+END_SRC
+
+*** Test
+#+BEGIN_SRC sh :noweb yes :results output
+<<isolateConstraints>>
+<<getDependencyNames>>
+<<allExtraLibraries>>
+cd ~/temp/rifactor
+allExtraLibraries
+#+END_SRC
+
+#+RESULTS:
+: z
+
+** Build-tools
+#+NAME: allBuildTools
+#+BEGIN_SRC sh :tangle cabbage
+cabalBuildTools() {
+  cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks | grep -i "build-tools" | \
+  awk 'BEGIN { FS=":"; } { print($2); }'
+}
+
+allBuildToolsAux() {
+  cabalBuildTools
+  local DEPS=($(getDependencies cabal.config))
+  local d
+  (cd .cabbages && \
+   for d in "${DEPS[@]}"; do
+     (cd "$d" &&  cabalBuildTools)
+   done)
+}
+
+allBuildTools() {
+  local TOOLS=($(allBuildToolsAux | sed 's/,/\
+/' | uniq))
+  echo "${TOOLS[@]}"
+}
+#+END_SRC
+
+*** Test
+#+BEGIN_SRC sh :noweb yes :results output
+<<isolateConstraints>>
+<<getDependencyNames>>
+<<allExtraLibraries>>
+<<allBuildTools>>
+cd ~/temp/rifactor
+allBuildTools
+#+END_SRC
+
+#+RESULTS:
+: 
+
+** Configuration lookup
 We support setting project-wide flags in a ~cabbage.config~ file that
 looks somewhat like a ~cabal.config~ file.
 
