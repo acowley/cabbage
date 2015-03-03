@@ -45,6 +45,37 @@ If you have benchmark or test suites, you will want to run ~cabbage
 -a~ to indicate that /all/ targets should be considered when gathering
 dependencies.
 
+*** System dependencies
+It will take some work to alias names in a Cabal package's
+~extra-libraries~ field to Nix package names. For the time being, you
+can use a ~cabbage.config~ file in your project directory to specify
+~systemDeps~ for each package. These will be propagated to downstream
+dependencies so that they will be available in the build
+environment. This part of a ~cabbage.config~ file looks like this,
+
+#+BEGIN_EXAMPLE
+systemDeps:
+  mypkg: foo bar
+#+END_EXAMPLE
+
+This says that ~foo~ and ~bar~ should listed in the ~buildInputs~
+field of ~mypkg~ and everything that depends on it. The names ~foo~
+and ~bar~ are resolved in the ~nixpkgs~ scope.
+
+A real example is for the ~zlib~ package that requires the nixpkgs
+package named ~zlib~. This is a bit confusing, but remember that the
+keys here are Cabal packages, while the values are Nix packages.
+
+#+BEGIN_EXAMPLE
+systemDeps:
+  zlib: zlib
+#+END_EXAMPLE
+
+This says that the Haskell package ~zlib~ (the one to the left of the
+colon) depends upon the Nix package ~zlib~ that we get from
+nixpkgs. Every Cabal package that depends on the Haskell ~zlib~
+package will have the Nix ~zlib~ package in its build environment.
+
 *** Flags
 If there are flags that should be set for the package you are building
 or any of its dependencies, you can create a file ~cabbage.config~
@@ -654,6 +685,32 @@ EOF
   awk "$FINDFLAGS"
 }
 
+# Find any systemDeps (system dependencies) specified for the named
+# package in a cabbage.config file. The package name should be
+# unversioned.
+systemDepsFor() {
+  local FINDDEPS
+  read -r -d '' FINDDEPS<<EOF
+BEGIN { inDeps = 0; }
+/^systemDeps:/ { inDeps = 1; }
+/^[^[:space:]]/ { if(inDeps == 2) { exit 0; } }
+{
+  if(inDeps == 1) {
+    inDeps = 2;
+  } else if(inDeps == 2) {
+    gsub(/^[[:space:]]*/,"",\$1);
+    if(\$1 == "$1:") {
+      for(i = 2; i <= NR; ++i) {
+        printf("%s", \$(i));
+        if(i != NR) { printf(" "); }
+      }
+    }
+  }
+}
+EOF
+  awk "$FINDDEPS"
+}
+
 # Takes a flag setting and replaces occurences of that flag in a
 # .cabal file with the boolean value indicated by the argument. An
 # argument of "foo" or "+foo" sets flag "foo" to "True", while "-foo"
@@ -1117,7 +1174,7 @@ callCabbages() {
 
   for ((i = 0; i < ${#NAMES[@]}; ++i)); do
     echo "      ${NAMES[$i]} = callPackage .cabbages/${PKGS[$i]} {"
-    echo "        inherit frozenCabbages haskellBuildTools;"
+    echo "        inherit frozenCabbages haskellBuildTools pkgs;"
     echo "      };"
   done
 }
@@ -1176,10 +1233,17 @@ EOF
   fi
 
   local SYNOPSIS=$(getSynopsis)
+  local SYSTEMDEPS
+  if [ -f ../../cabbage.config ]; then
+    local MYNAME=$(unversionPackageName "$2")
+    SYSTEMDEPS=$(cat ../../cabbage.config | systemDepsFor "$MYNAME")
+  else
+    SYSTEMDEPS=""
+  fi
 
   # Now we build up the Nix expression
   IFS=$'\n' read -r -d '' NIX <<EOF
-{ stdenv, lib, haskellBuildTools, $FROZENUPSTREAM }:
+{ stdenv, lib, haskellBuildTools, pkgs, $FROZENUPSTREAM }:
 let cabalTmp = "cabal --config-file=./.cabal/config";
     $FROZENDEF
     mkCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
@@ -1199,7 +1263,10 @@ stdenv.mkDerivation rec {
             echo "./."
           fi);
   cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
-  buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps;
+  systemDeps = (with pkgs; [ $SYSTEMDEPS ]) ++
+               lib.lists.unique (lib.concatMap (lib.attrByPath ["systemDeps"] []) cabbageDeps);
+  propagatedBuildInputs = systemDeps;
+  buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps ++ systemDeps;
 
   # Build the commands to merge package databases
   cmds = lib.strings.concatStrings (map mkCmd cabbageDeps);
@@ -1231,7 +1298,7 @@ stdenv.mkDerivation rec {
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
     echo "Building..."
     \${cabalTmp} --builddir=\$out/dist build -v0
     \${cabalTmp} --builddir=\$out/dist copy
@@ -1517,9 +1584,11 @@ This expression is suitable for ~nix-shell~ or to be installed itself.
 defaultShell() {
   local NIX
   IFS=$'\n' read -r -d '' NIX <<'EOF'
-with import <nixpkgs> {};
-callPackage ./default.nix {
-   haskellBuildTools = [ ghc.ghc784
+let pkgs = import <nixpkgs> {}; in
+pkgs.callPackage ./default.nix {
+   inherit pkgs;
+   haskellBuildTools = with pkgs;
+                       [ ghc.ghc784
                          haskellPackages.cabalInstall_1_20_0_6
                          haskellPackages.happy ];
 }

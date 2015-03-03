@@ -212,6 +212,32 @@ EOF
   awk "$FINDFLAGS"
 }
 
+# Find any systemDeps (system dependencies) specified for the named
+# package in a cabbage.config file. The package name should be
+# unversioned.
+systemDepsFor() {
+  local FINDDEPS
+  read -r -d '' FINDDEPS<<EOF
+BEGIN { inDeps = 0; }
+/^systemDeps:/ { inDeps = 1; }
+/^[^[:space:]]/ { if(inDeps == 2) { exit 0; } }
+{
+  if(inDeps == 1) {
+    inDeps = 2;
+  } else if(inDeps == 2) {
+    gsub(/^[[:space:]]*/,"",\$1);
+    if(\$1 == "$1:") {
+      for(i = 2; i <= NR; ++i) {
+        printf("%s", \$(i));
+        if(i != NR) { printf(" "); }
+      }
+    }
+  }
+}
+EOF
+  awk "$FINDDEPS"
+}
+
 # Takes a flag setting and replaces occurences of that flag in a
 # .cabal file with the boolean value indicated by the argument. An
 # argument of "foo" or "+foo" sets flag "foo" to "True", while "-foo"
@@ -272,52 +298,24 @@ EOF
   awk "$AWK"
 }
 
-# Takes a versioned package name, determines if it is already
-# available.
-globallyInstalled() {
-  ghc-pkg --global list "$1" | grep -Fq "$1"
-}
-
 # Takes a constraint line, returns a package name with version
 getDependency() {
-   sed -E 's/(constraints: |[[:space:]]*)([-_[:alpha:]]*) ==([[:digit:].]*)(,)?/\2-\3/'
+   sed 's/^[Cc]onstraints://' | sed 's/^[[:space:]]*//' \
+   | sed 's/\([-_[:alpha:]]*\) \([[:digit:].]*[,]*\)/\1-\2/'
 }
 
 # Remove packages that come with GHC
 filterOutWiredIn() {
-  grep -Ev "^(base-\d|bin-package-db-\d|rts-\d|ghc-\d|ghc-prim-\d\
-|integer-gmp-\d)"
+  grep -Ev "^(base-[[:digit:]]|bin-package-db-[[:digit:]]|rts-[[:digit:]]|ghc-[[:digit:]]|ghc-prim-[[:digit:]]\
+|integer-gmp-[[:digit:]])"
 }
 
 # Takes a cabal.config file and outputs a list of package names
 getDependencies() {
-  (isolateConstraints < "$1") | getDependency | filterOutWiredIn
+  (isolateAndCleanupConstraints < "$1") | getDependency | filterOutWiredIn
   if [ -f cabbage.config ]; then
-    (isolateConstraints < cabbage.config) | getDependency | filterOutWiredIn
+    (isolateAndCleanupConstraints < cabbage.config) | getDependency | filterOutWiredIn
   fi
-}
-
-# Get dependencies that are /not/ in the global package DB
-getUninstalledDependencies() {
-  read -r -d '' FILTER<<'EOF'
-BEGIN {
-  firstLine = 1;
-}
-{
-  if(firstLine) {
-    split($0,arr," ");
-    for(i in arr) {
-      globallyInstalled[arr[i]] = 1;
-    }
-    firstLine = 0;
-  } else {
-    if(!($1 in globallyInstalled)) {
-      print($1);
-    }
-  }
-}
-EOF
-  (ghc-pkg list --global --simple-output; getDependencies "$1") | awk "$FILTER"
 }
 
 # Get the package in this directory's full versioned name
@@ -364,7 +362,7 @@ getDependencySources() {
   for i in "${!ADDEDSOURCEDIRS[@]}"; do
     ADDEDSOURCEPACKAGES[$i]=$(getAddedPackageName "${ADDEDSOURCEDIRS[$i]}")
   done
-  local DEPS=($(getUninstalledDependencies cabal.config))
+  local DEPS=($(getDependencies cabal.config))
   mkdir -p .cabbages
   local d
   for d in "${DEPS[@]}"; do
@@ -372,13 +370,14 @@ getDependencySources() {
     if [ "$i" -gt "-1" ]; then
       echo "Getting add-source dependency: $d"
       getAddSource "${ADDEDSOURCEDIRS[$i]}"
+    elif [ -d .cabbages/"$d" ]; then
+      echo "Using existing source dist of $d"
+    elif [ "${d: -5}" == ".4552" ]; then
+      echo "Cabbage patching globally installed package: $d"
+      cabbagePatch "$d"
     else
-      if [ -d .cabbages/"$d" ]; then
-        echo "Using existing source dist of $d"
-      else
-        echo "Getting dependency: $d"
-        cabal get "$d" -d .cabbages
-      fi
+      echo "Getting dependency: $d"
+      cabal get "$d" -d .cabbages
     fi
   done
 }
@@ -411,7 +410,7 @@ callCabbages() {
 
   for ((i = 0; i < ${#NAMES[@]}; ++i)); do
     echo "      ${NAMES[$i]} = callPackage .cabbages/${PKGS[$i]} {"
-    echo "        inherit frozenCabbages haskellBuildTools;"
+    echo "        inherit frozenCabbages haskellBuildTools pkgs;"
     echo "      };"
   done
 }
@@ -424,7 +423,7 @@ mkCabbage() {
   local FROZENUPSTREAM
   local FROZENDEF
   local LINKSANDBOX
-  local DEPS=($(getUninstalledDependencies cabal.config))
+  local DEPS=($(getDependencies cabal.config))
 
   local DEPNAMES
   local i
@@ -450,7 +449,7 @@ EOF
     # dependencies in the nix store so the user can continue using a
     # standard cabal workflow (e.g. tools like ghc-mod).
     mkdir -p .cabal-sandbox/lib/"$1"
-    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/ && ln -sFf \${p}/.cabal-sandbox/lib/$1/* $(pwd)/.cabal-sandbox/lib/ && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/";
+    LINKSANDBOX="ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/\n";
 
     # We create a dummy sdist file so that the src attribute on the
     # downstream package's nix expression is a file, even if its
@@ -470,22 +469,27 @@ EOF
   fi
 
   local SYNOPSIS=$(getSynopsis)
+  local SYSTEMDEPS
+  if [ -f ../../cabbage.config ]; then
+    local MYNAME=$(unversionPackageName "$2")
+    SYSTEMDEPS=$(cat ../../cabbage.config | systemDepsFor "$MYNAME")
+  else
+    SYSTEMDEPS=""
+  fi
 
   # Now we build up the Nix expression
   IFS=$'\n' read -r -d '' NIX <<EOF
-{ stdenv, lib, haskellBuildTools, $FROZENUPSTREAM }:
+{ stdenv, lib, haskellBuildTools, pkgs, $FROZENUPSTREAM }:
 let cabalTmp = "cabal --config-file=./.cabal/config";
     $FROZENDEF
     mkCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
                      p = pkg.outPath;
-                     libPath = ".cabal-sandbox/lib/$1";
                      pkgPath = ".cabal-sandbox/$1-packages.conf.d";
-                 in ''ln -sFf \${p}/\${libPath}/* \$out/\${libPath}/
-                      ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
+                 in ''ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
                     '';
     mkSetupCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
                           p = pkg.outPath;
-                      in "$LINKSANDBOX\n";
+                      in "$LINKSANDBOX";
 in
 stdenv.mkDerivation rec {
   name = "haskell-$2";
@@ -495,7 +499,10 @@ stdenv.mkDerivation rec {
             echo "./."
           fi);
   cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
-  buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps;
+  systemDeps = (with pkgs; [ $SYSTEMDEPS ]) ++
+               lib.lists.unique (lib.concatMap (lib.attrByPath ["systemDeps"] []) cabbageDeps);
+  propagatedBuildInputs = systemDeps;
+  buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps ++ systemDeps;
 
   # Build the commands to merge package databases
   cmds = lib.strings.concatStrings (map mkCmd cabbageDeps);
@@ -545,7 +552,7 @@ stdenv.mkDerivation rec {
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
     echo "Building..."
     \${cabalTmp} --builddir=\$out/dist build -v0
     \${cabalTmp} --builddir=\$out/dist copy
@@ -570,7 +577,7 @@ prepCabbage() {
       fixAllFlags "$FLAGS"
     fi
   fi
-  cabal freeze > /dev/null
+  freezeCabbagePatch > /dev/null
   if ! [ $? -eq 0 ]; then
     freezeWithConstraints ../../cabal.config
   else
@@ -603,7 +610,7 @@ mkCabbages() {
   if [ "$1" = true ]; then
     freezeConsolidatedCabal ./*.cabal
   else
-    cabal freeze
+    freezeCabbagePatch
   fi
   if [ -f "$CABAL.cabbage.bak" ]; then
     mv "$CABAL.cabbage.bak" "$CABAL"
@@ -622,10 +629,8 @@ mkCabbages() {
   fi
   pushd .cabbages > /dev/null
   for d in "${deps[@]}"; do
-    if ! globallyInstalled $d; then
-      echo "Making cabbage: $d"
-      (cd "$d" && prepCabbage)
-    fi
+    echo "Making cabbage: $d"
+    (cd "$d" && prepCabbage)
   done
   popd > /dev/null
   
@@ -647,9 +652,104 @@ freezeConsolidatedCabal() {
   local REALCABAL=$(basename "$(ls ./*.cabal)")
   (cat "$REALCABAL" | testBenchExecutable) > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
-  cabal freeze
+  freezeCabbagePatch
   mv cabbageBackup.bak "$REALCABAL"
   rm cabbageDummy.cabal
+}
+
+# Takes a cabbage-patched versioned package name; prepares an sdist.
+cabbagePatch() {
+  if ! [ ${1: -5} = ".4552" ]; then
+    echo "Bad call to cabbagePatch with $1"
+    exit 1
+  fi
+  local NAME=${1%".4552"}
+  cabal get "$NAME" -d .cabbages
+  (cd .cabbages && \
+   mv "$NAME" "$1" && \
+   (cd "$1" && \
+    local CABAL=$(basename "$(ls ./*.cabal)") && \
+     mv "$CABAL" "$CABAL".bak && \
+     sed 's/\([Vv]ersion:[[:space:]]*\)\([[:digit:].]*\)$/\1\2.4552/' "$CABAL".bak > "$CABAL" && \
+     rm "$CABAL".bak))
+}
+
+# Tweaks the constraints in a piped ~cabal.config~ file to replace
+# globally installed packages with cabbage patched versions.
+cabbagePatchConfig() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN {
+  firstLine = 1;
+  inConstraints = 0;
+}
+/^[Cc]onstraints:/ {
+  inConstraints = 1;
+  printf("constraints:");
+  gsub(/^[Cc]onstraints:/,"",$0);
+}
+{
+  if(firstLine) {
+    split($0,arr," ");
+    for(i in arr) {
+      globallyInstalled[arr[i]] = 1;
+    }
+    firstLine = 0;
+  } else if(inConstraints) {
+    if(match($0, /^[[:space:]]/)) {
+      inConstraints = 2;
+      match($0, /^[[:space:]]*/);
+      for(i = 0; i < RLENGTH; ++i) printf(" ");
+      sub(/^[[:space:]]*/,"",$0);
+      match($0, " ==");
+      pkgName = substr($0, 1, RSTART - 1);
+      versionStart = RSTART + 3;
+      hasComma = 0;
+      if(match($0, ",")) {
+        hasComma = 1;
+      }
+      sub(/,/,"",$0);
+      pkgVersion = substr($0, versionStart);
+      versioned = sprintf("%s-%s",pkgName,pkgVersion);
+      if(versioned in globallyInstalled) {
+        printf("%s ==%s.4552", pkgName, pkgVersion);
+      } else {
+        printf("%s", $0);
+      }
+      if(hasComma) printf(",\n");
+      else printf("\n");
+    } else {
+      inConstraints = 0;
+      print($0);
+    }
+  } else {
+    print($0);
+  }
+}
+EOF
+  awk "$AWK"
+}
+
+# Print the list of globally installed packages that can be
+# reinstalled.
+getReinstallableGlobals() {
+  ghc-pkg list --global --simple-output | \
+  sed -e 's/base-[[:digit:].]*//' \
+      -e 's/bin-package-db-[[:digit:].]*//' \
+      -e 's/rts-[[:digit:].]*//' \
+      -e 's/ghc-[[:digit:].]*//' \
+      -e 's/ghc-prim-[[:digit:].]*//' \
+      -e 's/integer-gmp-[[:digit:].]*//' | \
+  sed 's/  [ ]*/ /'
+}
+
+# Freeze a cabal package, then tweak the ~cabal.config~ file to
+# cabbage patch references to globally installed packages.
+freezeCabbagePatch() {
+  cabal freeze
+  mv cabal.config cabal.config.bak
+  ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config
+  rm cabal.config.bak
 }
 
 # Takes a versioned file name, e.g. "foo-0.8.2",
@@ -696,9 +796,11 @@ getCabalFile() {
 defaultShell() {
   local NIX
   IFS=$'\n' read -r -d '' NIX <<'EOF'
-with import <nixpkgs> {};
-callPackage ./default.nix {
-   haskellBuildTools = [ ghc.ghc784
+let pkgs = import <nixpkgs> {}; in
+pkgs.callPackage ./default.nix {
+   inherit pkgs;
+   haskellBuildTools = with pkgs;
+                       [ ghc.ghc784
                          haskellPackages.cabalInstall_1_20_0_6
                          haskellPackages.happy ];
 }
@@ -773,7 +875,7 @@ else
       && mkCabbages $ALLTARGETS \
       && defaultShell > shell.nix \
       && cabal sandbox hc-pkg recache \
-      && nix-shell --run "echo 'Done'" \
+      && nix-shell --command "echo 'Done'" \
       && getNamedCabbage "$1")
   rm -r "$mytmpdir"
 fi
