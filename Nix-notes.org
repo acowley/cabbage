@@ -1156,7 +1156,7 @@ EOF
     # dependencies in the nix store so the user can continue using a
     # standard cabal workflow (e.g. tools like ghc-mod).
     mkdir -p .cabal-sandbox/lib/"$1"
-    LINKSANDBOX="mkdir -p $(pwd)/.cabal-sandbox/lib/$1/ && ln -sFf \${p}/.cabal-sandbox/lib/$1/* $(pwd)/.cabal-sandbox/lib/ && ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/";
+    LINKSANDBOX="ln -sFf \${pkg.outPath}/.cabal-sandbox/$1-packages.conf.d/*.conf "$(pwd)"/.cabal-sandbox/$1-packages.conf.d/\n";
 
     # We create a dummy sdist file so that the src attribute on the
     # downstream package's nix expression is a file, even if its
@@ -1184,14 +1184,12 @@ let cabalTmp = "cabal --config-file=./.cabal/config";
     $FROZENDEF
     mkCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
                      p = pkg.outPath;
-                     libPath = ".cabal-sandbox/lib/$1";
                      pkgPath = ".cabal-sandbox/$1-packages.conf.d";
-                 in ''ln -sFf \${p}/\${libPath}/* \$out/\${libPath}/
-                      ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
+                 in ''ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
                     '';
     mkSetupCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
                           p = pkg.outPath;
-                      in "$LINKSANDBOX\n";
+                      in "$LINKSANDBOX";
 in
 stdenv.mkDerivation rec {
   name = "haskell-$2";
