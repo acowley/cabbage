@@ -766,45 +766,6 @@ create a sandbox, then manually symlink dependency artefacts into the
 sandbox and let =cabal-install= invoke GHC with all the necessary path
 information.
 
-** Check for installed packages
-
-#+NAME: globallyInstalled
-#+BEGIN_SRC sh :tangle cabbage :exports code
-
-# Takes a versioned package name, determines if it is already
-# available.
-globallyInstalled() {
-  ghc-pkg --global list "$1" | grep -Fq "$1"
-}
-#+END_SRC
-
-*** Quick test
-#+BEGIN_SRC sh :results output :noweb yes :exports none
-<<globallyInstalled>>
-cd ghc-mod-5.2.1.2
-
-if globallyInstalled "transformers-0.3.0.0"; then
-  echo "transformers-0.3.0.0 is already available?!"
-else
-  echo "transformers-0.3.0.0 is not available"
-fi
-
-if globallyInstalled "transformers-0.3.0.1"; then
-  echo "transformers-0.3.0.1 is already available?!"
-else
-  echo "transformers-0.3.0.1 is not available"
-fi
-
-if ! globallyInstalled "transformers-0.3.0.1"; then
-  echo "We would need to install transformers-0.3.0.1"
-fi
-#+END_SRC
-
-#+RESULTS:
-: transformers-0.3.0.0 is already available?!
-: transformers-0.3.0.1 is not available
-: We would need to install transformers-0.3.0.1
-
 ** Getting package dependency names
 List the exact package names we need as dependencies.
 
@@ -830,28 +791,14 @@ getDependencies() {
   fi
 }
 
-# Get dependencies that are /not/ in the global package DB
-getUninstalledDependencies() {
-  read -r -d '' FILTER<<'EOF'
-BEGIN {
-  firstLine = 1;
-}
-{
-  if(firstLine) {
-    split($0,arr," ");
-    for(i in arr) {
-      globallyInstalled[arr[i]] = 1;
-    }
-    firstLine = 0;
-  } else {
-    if(!($1 in globallyInstalled)) {
-      print($1);
-    }
-  }
-}
-EOF
-  (ghc-pkg list --global --simple-output; getDependencies "$1") | awk "$FILTER"
-}
+#+END_SRC
+
+#+BEGIN_SRC sh :results output :noweb yes
+<<isolateConstraints>>
+<<getDependencyNames>>
+cd ~/temp/rifactor
+getDependencies cabal.config
+#cat cabal.confg | isolateConstraints
 #+END_SRC
 
 *** Quick tests
@@ -864,20 +811,6 @@ getDependencies experiments/a-cabal.config
 
 #+RESULTS:
 : TestCabbage-0.1.0.0
-
-
-Note that "transformers-0.3.0.0" is globally installed with GHC-7.8.4,
-so it should be filtered out.
-
-#+BEGIN_SRC sh :results output :noweb yes
-<<isolateConstraints>>
-<<getDependencyNames>>
-getUninstalledDependencies TransTest1/cabal.config
-#+END_SRC
-
-#+RESULTS:
-: mtl-2.1.3.1
-: transformers-compat-0.3.3.3
 
 
 ** Getting package dependency sources
@@ -995,7 +928,7 @@ getDependencySources() {
   for i in "${!ADDEDSOURCEDIRS[@]}"; do
     ADDEDSOURCEPACKAGES[$i]=$(getAddedPackageName "${ADDEDSOURCEDIRS[$i]}")
   done
-  local DEPS=($(getUninstalledDependencies cabal.config))
+  local DEPS=($(getDependencies cabal.config))
   mkdir -p .cabbages
   local d
   for d in "${DEPS[@]}"; do
@@ -1003,25 +936,26 @@ getDependencySources() {
     if [ "$i" -gt "-1" ]; then
       echo "Getting add-source dependency: $d"
       getAddSource "${ADDEDSOURCEDIRS[$i]}"
+    elif [ -d .cabbages/"$d" ]; then
+      echo "Using existing source dist of $d"
+    elif [ "${d: -5}" == ".4552" ]; then
+      echo "Cabbage patching globally installed package: $d"
+      cabbagePatch "$d"
     else
-      if [ -d .cabbages/"$d" ]; then
-        echo "Using existing source dist of $d"
-      else
-        echo "Getting dependency: $d"
-        cabal get "$d" -d .cabbages
-      fi
+      echo "Getting dependency: $d"
+      cabal get "$d" -d .cabbages
     fi
   done
 }
 #+END_SRC
 
 #+BEGIN_SRC sh :noweb yes :exports none :results output
-<<globallyInstalled>>
 <<getDependencyNames>>
 <<getAddedSources>>
 <<getAddSource>>
 <<findIndex>>
 <<getDependencySources>>
+<<cabbagePatch>>
 
 cd CabbageDown
 getDependencySources
@@ -1196,7 +1130,7 @@ mkCabbage() {
   local FROZENUPSTREAM
   local FROZENDEF
   local LINKSANDBOX
-  local DEPS=($(getUninstalledDependencies cabal.config))
+  local DEPS=($(getDependencies cabal.config))
 
   local DEPNAMES
   local i
@@ -1324,7 +1258,7 @@ prepCabbage() {
       fixAllFlags "$FLAGS"
     fi
   fi
-  cabal freeze > /dev/null
+  freezeCabbagePatch > /dev/null
   if ! [ $? -eq 0 ]; then
     freezeWithConstraints ../../cabal.config
   else
@@ -1357,7 +1291,7 @@ mkCabbages() {
   if [ "$1" = true ]; then
     freezeConsolidatedCabal ./*.cabal
   else
-    cabal freeze
+    freezeCabbagePatch
   fi
   if [ -f "$CABAL.cabbage.bak" ]; then
     mv "$CABAL.cabbage.bak" "$CABAL"
@@ -1376,10 +1310,8 @@ mkCabbages() {
   fi
   pushd .cabbages > /dev/null
   for d in "${deps[@]}"; do
-    if ! globallyInstalled $d; then
-      echo "Making cabbage: $d"
-      (cd "$d" && prepCabbage)
-    fi
+    echo "Making cabbage: $d"
+    (cd "$d" && prepCabbage)
   done
   popd > /dev/null
   
@@ -1388,7 +1320,6 @@ mkCabbages() {
 #+END_SRC
 
 #+BEGIN_SRC sh :exports none :results output :noweb yes
-<<globallyInstalled>>
 <<getPackageDBPath>>
 <<getDependencyNames>>
 <<mkCabbage>>
@@ -1402,6 +1333,7 @@ mkCabbages() {
 <<pinBuildDepends>>
 <<freezeWithConstraints>>
 <<updateConstraintsAwk>>
+<<cabbagePatch>>
 
 (cd CabbageDown && mkCabbages)
 #+END_SRC
@@ -1449,9 +1381,127 @@ freezeConsolidatedCabal() {
   local REALCABAL=$(basename "$(ls ./*.cabal)")
   (cat "$REALCABAL" | testBenchExecutable) > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
-  cabal freeze
+  freezeCabbagePatch
   mv cabbageBackup.bak "$REALCABAL"
   rm cabbageDummy.cabal
+}
+#+END_SRC
+
+* Shadowing the global package database
+A problem occurs when we want to rebuild a globally installed package
+with different dependencies. This would leave us with two packages of
+the same name and version.
+
+There are some limitations to passing GHC packages that have identical
+names and versions to ones that are installed in the global package
+database. Namely, even if you pass the ~-hide-all-packages~ to GHC,
+then supply it packages with the ~-package-id~ flag, a globally
+installed package with the same name and version as one given via
+~-package-id~ can interfere with the build. To combat this, we create
+"cabbage-patched" versions of globally-installed packages.
+
+We do this by copying the package source for the globally-installed
+package, and appending 4552 to the version number (the PLU code for
+Napa Cabbage). We then tweak every frozen build plan that refers to
+the globally-installed package to instead refer to the cabbage-patched
+version.
+
+#+NAME: cabbagePatch
+#+BEGIN_SRC sh :tangle cabbage :exports code
+
+# Takes a cabbage-patched versioned package name; prepares an sdist.
+cabbagePatch() {
+  if ! [ ${1: -5} = ".4552" ]; then
+    echo "Bad call to cabbagePatch with $1"
+    exit 1
+  fi
+  local NAME=${1%".4552"}
+  cabal get "$NAME" -d .cabbages
+  (cd .cabbages && \
+   mv "$NAME" "$1" && \
+   (cd "$1" && \
+    local CABAL=$(basename "$(ls ./*.cabal)") && \
+     mv "$CABAL" "$CABAL".bak && \
+     sed 's/\([Vv]ersion:[[:space:]]*\)\([[:digit:].]*\)$/\1\2.4552/' "$CABAL".bak > "$CABAL" && \
+     rm "$CABAL".bak))
+}
+
+# Tweaks the constraints in a piped ~cabal.config~ file to replace
+# globally installed packages with cabbage patched versions.
+cabbagePatchConfig() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN {
+  firstLine = 1;
+  inConstraints = 0;
+}
+/^[Cc]onstraints:/ {
+  inConstraints = 1;
+  printf("constraints:");
+  gsub(/^[Cc]onstraints:/,"",$0);
+}
+{
+  if(firstLine) {
+    split($0,arr," ");
+    for(i in arr) {
+      globallyInstalled[arr[i]] = 1;
+    }
+    firstLine = 0;
+  } else if(inConstraints) {
+    if(match($0, /^[[:space:]]/)) {
+      inConstraints = 2;
+      match($0, /^[[:space:]]*/);
+      for(i = 0; i < RLENGTH; ++i) printf(" ");
+      sub(/^[[:space:]]*/,"",$0);
+      match($0, " ==");
+      pkgName = substr($0, 1, RSTART - 1);
+      versionStart = RSTART + 3;
+      hasComma = 0;
+      if(match($0, ",")) {
+        hasComma = 1;
+      }
+      sub(/,/,"",$0);
+      pkgVersion = substr($0, versionStart);
+      versioned = sprintf("%s-%s",pkgName,pkgVersion);
+      if(versioned in globallyInstalled) {
+        printf("%s ==%s.4552", pkgName, pkgVersion);
+      } else {
+        printf("%s", $0);
+      }
+      if(hasComma) printf(",\n");
+      else printf("\n");
+    } else {
+      inConstraints = 0;
+      print($0);
+    }
+  } else {
+    print($0);
+  }
+}
+EOF
+  awk "$AWK"
+}
+
+# Print the list of globally installed packages that can be
+# reinstalled.
+getReinstallableGlobals() {
+  ghc-pkg list --global --simple-output | \
+  sed -e 's/base-[[:digit:].]*//' \
+      -e 's/bin-package-db-[[:digit:].]*//' \
+      -e 's/rts-[[:digit:].]*//' \
+      -e 's/ghc-[[:digit:].]*//' \
+      -e 's/ghc-prim-[[:digit:].]*//' \
+      -e 's/integer-gmp-[[:digit:].]*//' | \
+  sed 's/  [ ]*/ /'
+}
+
+# Freeze a cabal package, then tweak the ~cabal.config~ file to
+# cabbage patch references to globally installed packages.
+freezeCabbagePatch() {
+  cabal freeze
+  mv cabal.config cabal.config.bak
+  ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config
+  rm cabal.config.bak
 }
 #+END_SRC
 
