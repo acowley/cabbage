@@ -23,7 +23,7 @@ regular bash script that calls out to ~sed~, ~awk~, ~grep~, etc.
 Run ~cabbage~ in your project's root directory (containing the
 project's ~.cabal~ file). Then run,
 
-#+BEGIN_SRC sh :exports none
+#+BEGIN_SRC sh
 nix-shell --command 'sh $setup'
 #+END_SRC
 
@@ -33,7 +33,12 @@ sandbox. At this point, you can ~cabal configure~ etc., outside of
 
 If the above ~nix-shell~ command gives you an error (e.g. with Nix
 1.8), you can try running ~nix-shell~ without any arguments, then,
-once in the shell, run ~sh "$setup"~.
+once in the shell, run, 
+
+#+BEGIN_SRC sh
+sh "$setup"
+#+END_SRC
+
 
 To build the current package with Nix, use ~cabbage -b~ instead of
 ~nix-build shell.nix~. The former is a short wrapper around the
@@ -58,13 +63,14 @@ systemDeps:
   mypkg: foo bar
 #+END_EXAMPLE
 
-This says that ~foo~ and ~bar~ should listed in the ~buildInputs~
+This says that ~foo~ and ~bar~ should be listed in the ~buildInputs~
 field of ~mypkg~ and everything that depends on it. The names ~foo~
 and ~bar~ are resolved in the ~nixpkgs~ scope.
 
 A real example is for the ~zlib~ package that requires the nixpkgs
-package named ~zlib~. This is a bit confusing, but remember that the
-keys here are Cabal packages, while the values are Nix packages.
+package named ~zlib~. The repetition is a bit confusing, but remember
+that the keys here are Cabal packages, while the values are Nix
+packages.
 
 #+BEGIN_EXAMPLE
 systemDeps:

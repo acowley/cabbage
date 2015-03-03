@@ -10,7 +10,7 @@ Usage
 
 In a directory with a `.cabal` file, run `cabbage` to build Nix
 expressions for every dependency pinned to a specific set of versions
-identified by the cabal solver. Next, run `nix-shell --run 'sh
+identified by the cabal solver. Next, run `nix-shell --command 'sh
 $setup'` to ensure all dependencies are available in the Nix store and
 are linked into the cabal sandbox in the current development directory
 (this sandbox will be created for you if one doesn't exist). From this
