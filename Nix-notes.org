@@ -24,7 +24,7 @@ Run ~cabbage~ in your project's root directory (containing the
 project's ~.cabal~ file). Then run,
 
 #+BEGIN_SRC sh :exports none
-nix-shell --run 'sh $setup'
+nix-shell --command 'sh $setup'
 #+END_SRC
 
 to make sure all dependencies are built and linked into your
@@ -1562,7 +1562,7 @@ mytmpdir=$(mktemp -d 2>/dev/null || mktemp -d -t 'cabbage-temp')
     && mkCabbages $ALLTARGETS \
     && defaultShell > shell.nix \
     && cabal sandbox hc-pkg recache \
-    && nix-shell --run "echo 'Done'" \
+    && nix-shell --command "echo 'Done'" \
     && getNamedCabbage "$1")
 rm -r "$mytmpdir"
 #+END_SRC
