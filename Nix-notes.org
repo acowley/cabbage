@@ -1480,16 +1480,22 @@ mkCabbages() {
     echo "Error: Found multiple cabal files in $(pwd)!"
     exit 1
   fi
-  local CABAL=$(basename "$(ls ./*.cabal)")
-  if [ -f cabbage.config ]; then
-    local MYVNAME=$(getMyFullName)
-    local MYNAME=$(unversionPackageName "$MYVNAME")
-    local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
+
+  # Print a message if there are extra-libraries sepecified in any
+  # .cabal file used to build the downstream package that is not
+  # obviously guarded by an os(windows) or os(solaris) check.
+  warnExtraLibraries
     if ! [ "$FLAGS" = "" ]; then
       echo "Applying flags \"$FLAGS\" to the current project"
       cp "$CABAL" "$CABAL.cabbage.bak"
       fixAllFlags "$FLAGS"
     fi
+
+  local CABAL=$(basename "$(ls ./*.cabal)")
+  if [ -f cabbage.config ]; then
+    local MYVNAME=$(getMyFullName)
+    local MYNAME=$(unversionPackageName "$MYVNAME")
+    local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
   fi
   if [ "$1" = true ]; then
     freezeConsolidatedCabal ./*.cabal
