@@ -1452,6 +1452,11 @@ EOF
   echo "$NIX" > default.nix
 }
 
+# Freezes the cabal file in the current directory. If the argument to
+# this function is equal to false, then this is not a downstream
+# cabbage and its build plan should be intersected with a downstream
+# package's build plan. If the argument is true, then this /is/ a
+# downstream package.
 prepCabbage() {
   if [ -f cabbage.config ]; then
     local MYNAME=$(unversionPackageName "$d")
@@ -1464,11 +1469,11 @@ prepCabbage() {
   freezeCabbagePatch > /dev/null
   if ! [ $? -eq 0 ]; then
     freezeWithConstraints ../../cabal.config
-  else
+  elif [ "$1" = false ]; then
     mv cabal.config cabal.config.bak
     updateConstraintsAwk ../../cabal.config cabal.config.bak > cabal.config
   fi
-  mkCabbage "$dbPath" "$d" false
+  mkCabbage "$dbPath" "$d" "$1"
 }
 
 # Takes a flag to determine if the dependencies of all targets should
@@ -1485,17 +1490,17 @@ mkCabbages() {
   # .cabal file used to build the downstream package that is not
   # obviously guarded by an os(windows) or os(solaris) check.
   warnExtraLibraries
-    if ! [ "$FLAGS" = "" ]; then
-      echo "Applying flags \"$FLAGS\" to the current project"
-      cp "$CABAL" "$CABAL.cabbage.bak"
-      fixAllFlags "$FLAGS"
-    fi
 
   local CABAL=$(basename "$(ls ./*.cabal)")
   if [ -f cabbage.config ]; then
     local MYVNAME=$(getMyFullName)
     local MYNAME=$(unversionPackageName "$MYVNAME")
     local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
+    if ! [ "$FLAGS" = "" ]; then
+      echo "Applying flags \"$FLAGS\" to the current project"
+      cp "$CABAL" "$CABAL.cabbage.bak"
+      fixAllFlags "$FLAGS"
+    fi
   fi
   if [ "$1" = true ]; then
     freezeConsolidatedCabal ./*.cabal
@@ -1520,8 +1525,16 @@ mkCabbages() {
   pushd .cabbages > /dev/null
   for d in "${deps[@]}"; do
     echo "Making cabbage: $d"
-    (cd "$d" && prepCabbage)
+    (cd "$d" && prepCabbage false)
   done
+
+  local BUILDTOOLS=$(allBuildTools)
+  if [ "${#BUILDTOOLS}" -gt 0 ]; then
+    echo "Making cabbages for build-tools"
+    for d in "${BUILDTOOLS[@]}"; do
+      cabal get "$d"
+      echo "Making build-tool cabbage: $d"
+      (cd "$d" && prepCabbage true)
   popd > /dev/null
   
   mkCabbage "$dbPath" "$(getMyFullName)" true
