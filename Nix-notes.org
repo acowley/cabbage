@@ -100,6 +100,15 @@ will cause Cabal to treat that flag as ~False~. Assuming that
 will be built with the ~three~ flag which is needed when your project
 ultimately must build against ~transformers < 4~.
 
+*** Using ~nix-build~
+Rather than use the entire source directory as the source of the Nix
+package, cabbage uses a Cabal sdist as the source of the Nix package
+when building an unpacked Cabal package. This means that Nix doesn't
+waste time hashing data files or other junk you may have in your
+project directory. The upshot is that you *must* run ~cabal sdist~
+before running ~nix-build shell.nix~. If you do so, you should get an
+executable in ~result/bin~ as usual for Nix.
+
 ** Working with other packages
 You can also pass ~cabbage~ a path to a ~.cabal~ file or give it the
 name of a package on [[http://hackage.haskell.org][hackage]] (which itself may have a version
