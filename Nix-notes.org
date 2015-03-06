@@ -123,6 +123,219 @@ Put a shebang line at the top of our tangled program.
 #!/usr/bin/env bash
 #+END_SRC
 
+* Cabal file helpers
+Tooling for working with .cabal files.
+
+#+NAME: cabalHelpers
+#+BEGIN_SRC sh :exports code :tangle cabbage
+
+# Print only the library target portion of a .cabal file and filter
+# out linen comments.
+isolateLibraryTarget() {
+  sed -n '/^[Ll]ibrary/,/^[^[:space:]]/ { /^[[Ll]ibrary/p; /^[[:space:]]/p; }' \
+  | sed 's/--.*$//'
+}
+
+# Remove any Cabal block guarded by an "if os(windows)" or "if
+# os(solaris)" or "if os(ios)" conditional. This is a very fragile
+# test!
+removeWindowsBlocks() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN { windowsIndent = 0; }
+{
+  if(match($0, /if os\(windows\)/)) {
+    windowsIndent = RSTART;
+  } else if(match($0, /if os\(solaris\)/)) {
+    windowsIndent = RSTART;
+  } else if(match($0, /if os\(ios\)/)) {
+    windowsIndent = RSTART;
+  } else if(windowsIndent > 0) {
+    match($0, /^[[:space:]]*/);
+    if(RLENGTH <= windowsIndent) {
+      windowsIndent = 0;
+      print($0);
+    }
+  } else {
+    print($0);
+  }
+}
+EOF
+  awk "$AWK"
+}
+
+# Print the library target of any .cabal file in the current directory
+# while removing any blocks guarded by a windows or solaris check.
+cabalLibraryTarget() {
+  cat ./*.cabal | sed 's/--.*$//' | isolateLibraryTarget | removeWindowsBlocks
+}
+#+END_SRC
+
+** Build-tools
+Pick out all build-tools used by a package and all of its dependencies.
+
+#+NAME: allBuildTools
+#+BEGIN_SRC sh :tangle cabbage :exports code
+
+# Print each build-tool without any version constraint.
+cabalBuildTools() {
+  cabalLibraryTarget \
+  | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
+/' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
+}
+
+allBuildToolsAux() {
+  cabalBuildTools
+  if [ -d .cabbages ]; then
+    local DEPS=($(getDependencies cabal.config))
+    local d
+    (cd .cabbages && \
+     for d in "${DEPS[@]}"; do
+       (cd "$d" &&  cabalBuildTools)
+     done)
+  fi
+}
+
+# Print the array of all build-tools used to build this package and
+# all its dependencies.
+allBuildTools() {
+  local TOOLS=($(allBuildToolsAux | uniq))
+
+  # hsc2hs comes with GHC
+  local special
+  for special in hsc2hs; do
+    local i=$(findIndex "$special" TOOLS[@])
+    if [ "$i" -gt -1 ]; then
+      unset TOOLS[$i]
+    fi
+  done
+  echo "${TOOLS[@]}"
+}
+
+# Print the array of all buildable build-tools (ie not happy, alex, or
+# hsc2hs) used to build this package and all of its dependencies.
+allBuildableBuildTools() {
+  local TOOLS=($(allBuildToolsAux | uniq))
+
+  # We don't build alex, happy, or hsc2hs
+  local special
+  for special in alex happy hsc2hs; do
+    local i=$(findIndex "$special" TOOLS[@])
+    if [ "$i" -gt -1 ]; then
+      unset TOOLS[$i]
+    fi
+  done
+  echo "${TOOLS[@]}"
+}
+#+END_SRC
+
+*** Test
+#+BEGIN_SRC sh :noweb yes :results output
+<<cabalHelpers>>
+<<findIndex>>
+<<isolateConstraints>>
+<<getDependencyNames>>
+<<allExtraLibraries>>
+<<allBuildTools>>
+#cd ~/temp/rifactor
+cd ~/temp/OpenCL-1.0.3.4
+#cd ../Hocl-OpenCL
+allBuildTools
+#+END_SRC
+
+#+RESULTS:
+: c2hs
+
+** Frameworks
+We can pick out frameworks requirements that are needed on OS X (darwin).
+
+#+NAME: cabalFrameworks
+#+BEGIN_SRC sh :exports code :tangle cabbage
+cabalFrameworks() {
+  cabalLibraryTarget \
+  | grep -i "frameworks" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
+/' | uniq
+}
+#+END_SRC
+
+** Unconstrained
+As a last-ditch effort to freeze a build plan, we can remove all
+version constraints. This is needed for the hsc2hs build too.
+
+#+NAME: unconstrained
+#+BEGIN_SRC sh :exports code :tangle cabbage
+unconstrainCabal() {
+  local UNCONSTRAIN
+  read -r -d '' UNCONSTRAIN<<'EOF'
+BEGIN { 
+  buildDep = 0;
+  FS = ",";
+}
+{
+  lineSkip = 0;
+  if(match($0, /^[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:/)) {
+    buildDep = 1;
+    match($0, /^[[:space:]]*/);
+    indentation = RLENGTH;
+    for(i = 0; i < RLENGTH; ++i) printf(" ");
+    printf("build-depends:");
+    sub(/^[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:/,"",$0);
+    match($0, /^[[:space:]]*/);
+    for(i = 0; i < RLENGTH; ++i) printf(" ");
+    sub(/^[[:space:]]*/,"",$0);
+  } else if(buildDep) {
+    if(match($0,/^[[:space:]]*$/)) {
+      lineSkip = 1;
+    } else {
+      match($0, /^[[:space:]]*/);
+      if(RLENGTH <= indentation) {
+        buildDep = 0;
+      } else {
+        for(i = 0; i < RLENGTH; ++i) printf(" ");
+        sub(/^[[:space:]]*/,"",$0);
+      }
+    }
+  }
+  if(buildDep && !lineSkip) {
+    # Update a line of a build-depend
+    for(i = 1; i <= NF; ++i) {
+      sub(/^[[:space:]]*/,"",$(i));
+      sub(/[[:space:]]*$/,"",$(i));
+      if(match($(i), "[ ><=]")) {
+        pkgName = substr($(i), 1, RSTART - 1);
+        printf("%s", pkgName);
+      } else {
+        printf("%s", $(i));
+      }
+      if(i < NF) printf(", ");
+    }
+    printf("\n");
+  } else {
+    # Everything else gets printed
+    print $0
+  }
+}
+EOF
+  awk "$UNCONSTRAIN"
+}
+
+# Try freezing after removing all version constraints.
+freezeUnconstrained() {
+ local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
+  if [ "$NUMCABALS" -gt 1 ]; then
+    echo "Error: Found multiple cabal files in $(pwd)"
+    exit 1
+  fi
+  local REALCABAL=$(basename "$(ls ./*.cabal)")
+  (cat "$REALCABAL" | sed 's/--.*$//' | unconstrainCabal) > cabbageDummy.cabal
+  mv "$REALCABAL" cabbageBackup.bak
+  mv cabbageDummy.cabal "$REALCABAL"
+  freezeCabbagePatch
+  local OK=$?
+  return $OK
+}
+#+END_SRC
+
 * Finding dependencies
 So we've got a package and we've created a sandbox. We can run =cabal
 freeze= to get a =cabal.config= file that lists all dependencies.
@@ -359,7 +572,7 @@ rm $TMP2
 
 ** Updating build-depends constraints in-place
 
-This approach process an entire ~.cabal~ file, leaving everything
+This approach processes an entire ~.cabal~ file, leaving everything
 intact except for dependency constraints that are overridden by the
 ~cabal.config~ generated for the downstream package.
 
@@ -534,11 +747,15 @@ freezeWithConstraints() {
   local REALCABAL=$(basename "$(ls ./*.cabal)")
   ({ (isolateAndCleanupConstraints < "$1"); echo "***"; cat "$REALCABAL"; } \
    | pinBuildDepends) > cabbageDummy.cabal
+
+  # Remove cabbage-patch version suffixes so cabal freeze can work
+  sed 's/\( ==[[:digit:].]*\).4552/\1/' cabbageDummy.cabal > cabbageDummy2.cabal
+  rm cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
-  cabal freeze
+  freezeCabbagePatch
   local OK=$?
   mv cabbageBackup.bak "$REALCABAL"
-  rm cabbageDummy.cabal
+  rm cabbageDummy2.cabal
   return $OK
 }
 #+END_SRC
@@ -596,11 +813,15 @@ updateTimeStamps() {
   for ((i = 0; i < "''\${#DEPS[@]}"; ++i)); do
     STAMPED[\$i]="(\"''\${DEPS[\$i]}\",\$CUR_TIME)"
   done
-  local NEWSTAMP="(\"\$1\",[''\${STAMPED[@]}])"
+  local LIST=\$(printf ",%s" "''\${STAMPED[@]}")
+  LIST=''\${LIST:1}
+  local NEWSTAMP="(\"\$1\",[\$LIST])"
   if echo "\$3" | grep -q "\$1"; then
     echo "\$3" | sed "s:(\"\$1\",[^]]*\]):\$NEWSTAMP:"
+  elif echo "\$3" | grep -q "]\\\\$"; then
+    echo "\$3" | sed "s:\]\\\$:,\$NEWSTAMP]:"
   else
-    echo "\$3" | sed "s:\]\\\$:\$NEWSTAMP]:"
+    echo "[\$NEWSTAMP]"
   fi
 }
 #+END_SRC
@@ -618,17 +839,19 @@ tangled into a bash block and then properly escaped for a Nix expression.
 # timestamp string.
 updateTimeStamps() {
   local -a DEPS=("${!2}")
-  local CUR_TIME=\$(date +%s)
+  local CUR_TIME=$(date +%s)
   local i
   local STAMPED
   for ((i = 0; i < "${#DEPS[@]}"; ++i)); do
-    STAMPED[\$i]="(\"${DEPS[$i]}\",$CUR_TIME)"
+    STAMPED[$i]="(\"${DEPS[$i]}\",$CUR_TIME)"
   done
-  local NEWSTAMP="(\"$1\",[${STAMPED[@]}])"
+  local LIST=$(printf ",%s" "${STAMPED[@]}")
+  LIST=${LIST:1}
+  local NEWSTAMP="(\"$1\",[$LIST])"
   if echo "$3" | grep -q "$1"; then
     echo "$3" | sed "s:(\"$1\",[^]]*\]):$NEWSTAMP:"
   else
-    echo "$3" | sed "s:\]\$:$NEWSTAMP]:"
+    echo "$3" | sed "s:\]$:$NEWSTAMP]:"
   fi
 }
 #+END_SRC
@@ -650,49 +873,17 @@ updateTimeStamps "$ghcPlatform" deps[@] "$oldStampsPop"
 #+END_SRC
 
 #+RESULTS:
-: [("x86_64-osx-ghc-7.8.4",[("/A/B/C",1423839326) ("/Foo/Bar Me/Baz",1423839326)])]
-: [("x86_64-osx-ghc-7.8.3", [("/A/B/C", 42)]),("x86_64-osx-ghc-7.8.4",[("/A/B/C",1423839326) ("/Foo/Bar Me/Baz",1423839326)])]
+: [("x86_64-osx-ghc-7.8.4",[("/A/B/C",1425593674),("/Foo/Bar Me/Baz",1425593674)])]
+: [("x86_64-osx-ghc-7.8.3", [("/A/B/C", 42)]),("x86_64-osx-ghc-7.8.4",[("/A/B/C",1425593674),("/Foo/Bar Me/Baz",1425593674)])]
 
 * cabbage.config
 ** System dependencies
 Concatenate all ~extra-libraries~ fields in a build plan. This is a
 very rough listing as it simply filters out blocks of Cabal files
-guarded behind "if os(windows)" and "if os(solaris)".
+guarded behind one of "if os(windows)", "os(solaris)", or "os(ios)".
 
 #+NAME: allExtraLibraries
 #+BEGIN_SRC sh :exports code :tangle cabbage
-
-# Print only the library target portion of a .cabal file and filter
-# out linen comments.
-isolateLibraryTarget() {
-  sed -n '/^[Ll]ibrary/,/^[^[:space:]]/ { /^[[Ll]ibrary/p; /^[[:space:]]/p; }' \
-  | sed 's/--.*$//'
-}
-
-# Remove any Cabal block guarded by an "if os(windows)" or "if
-# os(solaris)" conditional. This is a very fragile test!
-removeWindowsBlocks() {
-  local AWK
-  read -r -d '' AWK<<'EOF'
-BEGIN { windowsIndent = 0; }
-{
-  if(match($0, /if os\(windows\)/)) {
-    windowsIndent = RSTART;
-  } else if(match($0, /if os\(solaris\)/)) {
-    windowsIndent = RSTART;
-  }else if(windowsIndent > 0) {
-    match($0, /^[[:space:]]*/);
-    if(RLENGTH <= windowsIndent) {
-      windowsIndent = 0;
-      print($0);
-    }
-  } else {
-    print($0);
-  }
-}
-EOF
-  awk "$AWK"
-}
 
 # Prints the extra-libraires from a cabal file iff they occur in a
 # library target.
@@ -723,13 +914,16 @@ allExtraLibraries() {
 
 # Let the user know they might need to prepare system dependencies.
 warnExtraLibraries() {
-  local LIBS=$(allExtraLibraries)
+  local LIBS=($(allExtraLibraries))
   if [ "${#LIBS[@]}" -gt 0 ]; then
+    echo
     echo "You may need to supply system dependencies!"
-    echo "See the cabbage documentation for how to do this with "
-    echo "a 'systemDeps' section in a cabbage.config file."
+    echo
+    echo "See the cabbage documentation for how to do this with a 'systemDeps'"
+    echo "section in a cabbage.config file."
+    echo
     echo "Potentially necessary extra-libraries: ${LIBS[@]}"
-    read -p "Press any key to continue..." -n 1
+    read -p "Press any key to continue..." -n 1 -t 5
     echo
   fi
 }
@@ -737,6 +931,7 @@ warnExtraLibraries() {
 
 *** Test
 #+BEGIN_SRC sh :noweb yes :results output
+<<cabalHelpers>>
 <<isolateConstraints>>
 <<getDependencyNames>>
 <<allExtraLibraries>>
@@ -746,44 +941,6 @@ allExtraLibraries
 
 #+RESULTS:
 : z
-
-** Build-tools
-#+NAME: allBuildTools
-#+BEGIN_SRC sh :tangle cabbage
-cabalBuildTools() {
-  cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks | grep -i "build-tools" | \
-  awk 'BEGIN { FS=":"; } { print($2); }'
-}
-
-allBuildToolsAux() {
-  cabalBuildTools
-  local DEPS=($(getDependencies cabal.config))
-  local d
-  (cd .cabbages && \
-   for d in "${DEPS[@]}"; do
-     (cd "$d" &&  cabalBuildTools)
-   done)
-}
-
-allBuildTools() {
-  local TOOLS=($(allBuildToolsAux | sed 's/,/\
-/' | uniq))
-  echo "${TOOLS[@]}"
-}
-#+END_SRC
-
-*** Test
-#+BEGIN_SRC sh :noweb yes :results output
-<<isolateConstraints>>
-<<getDependencyNames>>
-<<allExtraLibraries>>
-<<allBuildTools>>
-cd ~/temp/rifactor
-allBuildTools
-#+END_SRC
-
-#+RESULTS:
-: 
 
 ** Configuration lookup
 We support setting project-wide flags in a ~cabbage.config~ file that
@@ -1319,7 +1476,8 @@ callCabbages() {
 
 # Build a .nix file from a .cabal file in the current directory Takes
 # the ghcPlatform string, this package's name, and whether or not this
-# package should define frozenCabbages.
+# package should define frozenCabbages: 0 = this is an upstream
+# package, 1 = this is a downstream package, 2 = this is a build-tool.
 mkCabbage() {
   local NIX
   local FROZENUPSTREAM
@@ -1334,8 +1492,8 @@ mkCabbage() {
     DEPNAMES[$i]=$(sed 's/\(.*\)-[[:digit:]].*/\1/' <<< "${DEPS[$i]}")
   done
 
-  if [ "$3" = true ]; then
-    # This is /the/ downstream package
+  if [ $3 -gt 0 ]; then
+    # This is /the/ downstream package or a build-tool
 
     # We will need the standard callPackage function
     FROZENUPSTREAM="callPackage"
@@ -1379,9 +1537,29 @@ EOF
     SYSTEMDEPS=""
   fi
 
+  local TOOLS=($(allBuildTools))
+  local TOOLSDEPS=""
+  if [ "${#TOOLS[@]}" -gt 0 ]; then
+    TOOLSDEPS=$(echo "${TOOLS[@]}" | awk '{for(i=1;i<=NF;i++) printf(", %s",$(i));}')
+  fi
+
+  local FRAMEWORKS=($(cabalFrameworks))
+  local NIXLD
+  if [ "${#FRAMEWORKS[@]}" -gt 0 ]; then
+    local fw
+    NIXLD="\
+  NIX_LDFLAGS = lib.optionalString stdenv.isDarwin \""
+    for fw in "${FRAMEWORKS[@]}"; do
+      NIXLD="$NIXLD -framework $fw"
+    done
+    NIXLD="$NIXLD\";"
+  else
+    NIXLD=""
+  fi
+
   # Now we build up the Nix expression
   IFS=$'\n' read -r -d '' NIX <<EOF
-{ stdenv, lib, haskellBuildTools, pkgs, $FROZENUPSTREAM }:
+{ stdenv, lib, haskellBuildTools, pkgs$TOOLSDEPS, $FROZENUPSTREAM }:
 let cabalTmp = "cabal --config-file=./.cabal/config";
     $FROZENDEF
     mkCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
@@ -1389,13 +1567,15 @@ let cabalTmp = "cabal --config-file=./.cabal/config";
                      pkgPath = ".cabal-sandbox/$1-packages.conf.d";
                  in ''ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
                     '';
-    mkSetupCmd = pkg: let nm = lib.strings.removePrefix "haskell-" pkg.name;
-                          p = pkg.outPath;
-                      in "$LINKSANDBOX";
+$(if [ $3 -gt 0 ]; then
+    echo "    mkSetupCmd = pkg: let nm = lib.strings.removePrefix \"haskell-\" pkg.name;"
+    echo "                          p = pkg.outPath;"
+    echo "                      in \"$LINKSANDBOX\";"
+  fi)
 in
 stdenv.mkDerivation rec {
   name = "haskell-$2";
-  src = $(if [ "$3" = true ]; then 
+  src = $(if [ $3 -eq 1 ]; then 
             echo "./dist/$2.tar.gz"
           else
             echo "./."
@@ -1403,13 +1583,14 @@ stdenv.mkDerivation rec {
   cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
   systemDeps = (with pkgs; [ $SYSTEMDEPS ]) ++
                lib.lists.unique (lib.concatMap (lib.attrByPath ["systemDeps"] []) cabbageDeps);
-  propagatedBuildInputs = systemDeps;
-  buildInputs = [ stdenv.cc ] ++ haskellBuildTools ++ cabbageDeps ++ systemDeps;
+  propagatedBuildInputs = systemDeps;$NIXLD
+  buildInputs = [ stdenv.cc $(echo "${TOOLS[@]}")] ++ haskellBuildTools ++ cabbageDeps ++ systemDeps;
 
   # Build the commands to merge package databases
   cmds = lib.strings.concatStrings (map mkCmd cabbageDeps);
+$(if [ $3 -gt 0 ]; then
+    cat << SETUPEOF
   setupCmds = lib.strings.concatStrings (map mkSetupCmd cabbageDeps);
-
   setup = builtins.toFile "setup.sh" ''
     <<updateTimeStamps>>
     eval "\$setupCmds"
@@ -1418,6 +1599,8 @@ stdenv.mkDerivation rec {
     OLDTIMESTAMPS=\$(cat .cabal-sandbox/add-source-timestamps)
     updateTimeStamps "$1" SRCS[@] "\$OLDTIMESTAMPS" > .cabal-sandbox/add-source-timestamps
   '';
+SETUPEOF
+  fi)
 
   builder = builtins.toFile "builder.sh" ''
     source \$stdenv/setup
@@ -1452,12 +1635,12 @@ EOF
   echo "$NIX" > default.nix
 }
 
-# Freezes the cabal file in the current directory. If the argument to
-# this function is equal to false, then this is not a downstream
-# cabbage and its build plan should be intersected with a downstream
-# package's build plan. If the argument is true, then this /is/ a
-# downstream package.
+# Freezes the cabal file in the current directory. Takes the versioned
+# name of the package to prepare, and the dbPath for the current
+# platform (e.g. x86_64-osx-ghc-7.8.4).
 prepCabbage() {
+  local d="$1"
+  local dbPath="$2"
   if [ -f cabbage.config ]; then
     local MYNAME=$(unversionPackageName "$d")
     local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
@@ -1466,30 +1649,29 @@ prepCabbage() {
       fixAllFlags "$FLAGS"
     fi
   fi
+  cabal sandbox init --sandbox=../../.cabal-sandbox > /dev/null
   freezeCabbagePatch > /dev/null
   if ! [ $? -eq 0 ]; then
     freezeWithConstraints ../../cabal.config
-  elif [ "$1" = false ]; then
+  else
     mv cabal.config cabal.config.bak
     updateConstraintsAwk ../../cabal.config cabal.config.bak > cabal.config
   fi
-  mkCabbage "$dbPath" "$d" "$1"
+  rm cabal.sandbox.config
+  mkCabbage "$dbPath" "$d" 0
 }
 
 # Takes a flag to determine if the dependencies of all targets should
 # be built. If the flag is true, then the build-depends of all targets
-# are consolidated and considered when determining a build plan.
+# are consolidated and considered when determining a build plan. The
+# second argument is another flag for which true indicates this is a
+# downstream package, and false indicates this is a build-tool.
 mkCabbages() {
   local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
   if [ "$NUMCABALS" -gt 1 ]; then
     echo "Error: Found multiple cabal files in $(pwd)!"
     exit 1
   fi
-
-  # Print a message if there are extra-libraries sepecified in any
-  # .cabal file used to build the downstream package that is not
-  # obviously guarded by an os(windows) or os(solaris) check.
-  warnExtraLibraries
 
   local CABAL=$(basename "$(ls ./*.cabal)")
   if [ -f cabbage.config ]; then
@@ -1506,6 +1688,12 @@ mkCabbages() {
     freezeConsolidatedCabal ./*.cabal
   else
     freezeCabbagePatch
+    if ! [ $? -eq 0 ]; then
+      if [ "$2" = false ]; then
+        echo "Trying emergency constraint patch..."
+        freezeUnconstrained
+      fi
+    fi
   fi
   if [ -f "$CABAL.cabbage.bak" ]; then
     mv "$CABAL.cabbage.bak" "$CABAL"
@@ -1522,22 +1710,40 @@ mkCabbages() {
   if [ -f cabbage.config ]; then
     cat cabbage.config | sowFlags
   fi
+
+  # Print a message if there are extra-libraries sepecified in any
+  # .cabal file used to build the downstream package that is not
+  # obviously guarded by an os(windows) or os(solaris) check.
+  warnExtraLibraries
+
   pushd .cabbages > /dev/null
+  local d
   for d in "${deps[@]}"; do
     echo "Making cabbage: $d"
-    (cd "$d" && prepCabbage false)
+    (cd "$d" && prepCabbage "$d" "$dbPath")
   done
+  popd > /dev/null
 
-  local BUILDTOOLS=$(allBuildTools)
+  local BUILDTOOLS=($(allBuildableBuildTools))
+
   if [ "${#BUILDTOOLS}" -gt 0 ]; then
     echo "Making cabbages for build-tools"
-    for d in "${BUILDTOOLS[@]}"; do
-      cabal get "$d"
+    pushd .cabbages > /dev/null
+    local bt
+    for bt in "${BUILDTOOLS[@]}"; do
+      cabal get "$bt"
+      local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
       echo "Making build-tool cabbage: $d"
-      (cd "$d" && prepCabbage true)
-  popd > /dev/null
+      (cd "$d" && cabal sandbox init && mkCabbages false false)
+    done
+    popd > /dev/null
+  fi
   
-  mkCabbage "$dbPath" "$(getMyFullName)" true
+  if [ "$2" = true ]; then
+    mkCabbage "$dbPath" "$(getMyFullName)" 1
+  else
+    mkCabbage "$dbPath" "$(getMyFullName)" 2
+  fi
 }
 #+END_SRC
 
@@ -1720,10 +1926,10 @@ getReinstallableGlobals() {
 # Freeze a cabal package, then tweak the ~cabal.config~ file to
 # cabbage patch references to globally installed packages.
 freezeCabbagePatch() {
-  cabal freeze
-  mv cabal.config cabal.config.bak
-  ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config
-  rm cabal.config.bak
+  cabal freeze && \
+    mv cabal.config cabal.config.bak && \
+    ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config && \
+    rm cabal.config.bak
 }
 #+END_SRC
 
@@ -1739,15 +1945,34 @@ This expression is suitable for ~nix-shell~ or to be installed itself.
 
 # A default Nix expression suitable for nix-shell or installation.
 defaultShell() {
+  local TOOLS=($(allBuildableBuildTools))
+
+  local TOOLSDEPS
+  if [ "${#TOOLS[@]}" -gt 0 ]; then
+    TOOLSDEPS=$(echo " ${TOOLS[@]}")
+  else
+    TOOLSDEPS=""
+  fi
   local NIX
-  IFS=$'\n' read -r -d '' NIX <<'EOF'
-let pkgs = import <nixpkgs> {}; in
-pkgs.callPackage ./default.nix {
-   inherit pkgs;
-   haskellBuildTools = with pkgs;
-                       [ ghc.ghc784
-                         haskellPackages.cabalInstall_1_20_0_6
-                         haskellPackages.happy ];
+  IFS=$'\n' read -r -d '' NIX <<EOF
+let pkgs = import <nixpkgs> {};
+    haskellBuildTools = with pkgs;
+                        [ ghc.ghc784
+                          haskellPackages.cabalInstall_1_20_0_6 ];
+    happy = pkgs.haskellngPackages.happy;
+    alex = pkgs.haskellngPackages.alex;
+    callPackage = pkgs.lib.callPackageWith (pkgs // {inherit happy alex callPackage$TOOLSDEPS;});
+$(if [ "${#TOOLS[@]}" -gt 0 ]; then
+    local t
+    for t in "${TOOLS[@]}"; do
+      local buildTool=$(basename $(find .cabbages -name "$t-[[:digit:].]*" -depth 1))
+      echo "    $t = callPackage .cabbages/$buildTool/default.nix {"
+      echo "      inherit pkgs haskellBuildTools;"
+      echo "    };"
+    done
+  fi)
+in callPackage ./default.nix {
+   inherit pkgs haskellBuildTools;
 }
 EOF
   echo "$NIX"
@@ -1783,7 +2008,7 @@ mytmpdir=$(mktemp -d 2>/dev/null || mktemp -d -t 'cabbage-temp')
 (cd "$mytmpdir" \
     && getCabalFile "$1" \
     && cabal sandbox init \
-    && mkCabbages $ALLTARGETS \
+    && mkCabbages $ALLTARGETS true \
     && defaultShell > shell.nix \
     && cabal sandbox hc-pkg recache \
     && nix-shell --command "echo 'Done'" \
@@ -1910,29 +2135,16 @@ if [ "$#" -eq 0 ]; then
   if ! [ -f cabal.sandbox.config ]; then
     cabal sandbox init
   fi
+  mkCabbages $ALLTARGETS true
   if ! [ -f shell.nix ]; then
     defaultShell > shell.nix
   fi
-  mkCabbages $ALLTARGETS
 else
   <<buildInTempDir>>
 fi
 #+END_SRC
 
 * Tasks
-** TODO Support a --dry-run option
-It would be nice to get some sort of information about what you're
-getting into before kicking off a big build.
-** TODO Support a .cabbage dot file
-This can be used to specify things that go into
-~haskellBuildTools~. Specifically, the versions of GHC and
-cabal-install.
-** TODO Cache a hackage index file
-We can extract the .cabal file for every needed package from the
-index, and use that for nix file generation. However, the full index
-file is 8.5MB, so we certainly /don't/ want to download it for every
-cabbage run. However, having it cached locally would mean we could
-generate nix files without any network activity.
 ** TODO Cache cabal freeze output
 We can cache a ~cabal.config.bak~ file for a package. When looking
 things up in the cache, if we find such a file, check the hackage
@@ -1942,7 +2154,6 @@ file.
 
 Dealing with add-source dependencies could be a bit tricky. We could
 initially just not add such packages to the cache.
-
 ** TODO Cache cabbages
 Right now, we always download a package and we always generate a
 cabbage. What we could do is cache the downloaded source /and/ the
@@ -1954,58 +2165,17 @@ with the package's .cabal file and see if we've already generated an
 equivalent cabbage. This would just save us the trouble of producing
 the actual .nix files, but much of the work would have already been
 done.
-** TODO Produce a cabbage from a package's cabal file only
-We can download just the ~.cabal~ file with something like,
-
-#+BEGIN_SRC sh :exports none
-curl http://hackage.haskell.org/package/lens-4.7/lens.cabal
-#+END_SRC
-
-and pipe that straight into cabbage production. Then, if we /need/ to
-get the source, we can cabal get it. A downside to this is when it
-comes to add-sourced dependencies. If we delay copying the source,
-then we need to somehow remember how to get it. The current approach
-gets the source right when we're working out from where to get the
-~.cabal~ file for the dependency.
-** TODO Loosen up constraint parsing
-We might as well be a tiny bit flexible in parsing these lines.
-** TODO Add source dependencies for add source dependencies
-We can't run ~cabal freeze~ on an add-source dependency that depends
-on another add-source dependency. We should be able to share the
-downstream package's sandbox for that initial freeze. For subsequent,
-isolated builds to be placed in the Nix store, we may need to take
-care to prepare the sandbox before freezing.
-
-This may just be a matter of running ~cabal sandbox init
---sandbox=../../.cabal-sandbx~ in each upstream package's cabbage
-directory before running ~cabal freeze~.
-
 ** TODO systemDeps for common packages
 We could define a Nix expression that has ~systemDeps~ for a bunch of
 well-known Haskell packages. This could serve to obviate the need for
 a ~cabbage.config~ specification of ~systemDeps~ for common
-packages. Where would we install this package? If cabbage goes into
-nixpkgs, then we could just install it alongside.
+packages. Where would we install this expression?
 ** TODO Automatic extra-libraries parsing
 A Haskell package like ~zlib~ has an ~extra-libraries~ field that
 mentions ~z~. This system dependency, ~libz~, is provided by the
 nixpkgs package, ~zlib~. It would be nice to parse these out of .cabal
 files automatically and map them to nixpkgs package names. In the
 meantime, these can be manually specified a ~cabbage.config~ file.
-** TODO Deal with required build-tools
-What we want is to have unique derivations for the build-tools, but
-not intersect those build plans with the package we are building.
-
-Normally in Nix, we would just refer to an attribute and get its
-binaries on PATH when building our package. With cabbage, we don't
-have such things. What I think we want is a slight variation on the
-cabbage formula: A Nix derivation whose build plan is /not/
-intersected with the downstream package's.
-
-- We filter out the [Bb]uild-[Tt]ools sections of /all/ .cabal files,
-  including upstream packages.
-- We get source for the tools in the .cabbages directory as usual.
-- We include callPackage calls for each build tool from the downstream
-  shell.nix.
-- We include those derivations in the ~haskellBuildTools~ array.
-- Ensure this works with named package installations.
+** TODO Support pkg-config
+If a cabal package has a ~pkgconfig-depends~ field, then we need to
+add ~pkg-config~ as a ~buildInput~ along with the actual packages.
