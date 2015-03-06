@@ -941,7 +941,7 @@ freezeConsolidatedCabal() {
   local REALCABAL=$(basename "$(ls ./*.cabal)")
   (cat "$REALCABAL" | testBenchExecutable) > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
-  freezeCabbagePatch
+  freezeCabbagePatch false
   mv cabbageBackup.bak "$REALCABAL"
   rm cabbageDummy.cabal
 }
@@ -1049,10 +1049,18 @@ freezeIfNeeded() {
 }
 
 # Freeze a cabal package, then tweak the ~cabal.config~ file to
-# cabbage patch references to globally installed packages.
+# cabbage patch references to globally installed packages. If an
+# argument is given, we do /not/ search for a cached build plan. This
+# is useful when passing cabbage the "-a" flag, which will produce a
+# different build plan than when this package is built as a dependency
+# of something else.
 freezeCabbagePatch() {
-  freezeIfNeeded && \
-    ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config && \
+  if [ "$#" -gt 0 ]; then
+    cabal freeze && mv cabal.config cabal.config.bak
+  else
+    freezeIfNeeded
+  fi
+  ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config && \
     rm cabal.config.bak
 }
 
