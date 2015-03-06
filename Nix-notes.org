@@ -454,8 +454,7 @@ END {
   }
 }
 EOF
-awk "$intersect"
-# <<< $(cat $1 - $2 <<< "***")
+  awk "$intersect"
 }
 #+END_SRC
 
@@ -696,7 +695,7 @@ isolateConstraints() {
 }
 
 isolateAndCleanupConstraints() {
-  isolateConstraints | sed -e 's/^constraints: //' -e 's/^[[:space:]]*//' \
+  isolateConstraints | sed -e 's/^[Cc]onstraints: //' -e 's/^[[:space:]]*//' \
   | sed 's/\([-_[:alpha:]]*\) ==\([[:digit:].]*\),*$/\1 \2/'
 }
 #+END_SRC
@@ -1125,8 +1124,7 @@ List the exact package names we need as dependencies.
 #+BEGIN_SRC sh :tangle cabbage :exports code
 # Takes a constraint line, returns a package name with version
 getDependency() {
-   sed 's/^[Cc]onstraints://' | sed 's/^[[:space:]]*//' \
-   | sed 's/\([-_[:alpha:]]*\) \([[:digit:].]*[,]*\)/\1-\2/'
+   sed 's/\([-_[:alpha:]]*\) \([[:digit:].]*[,]*\)/\1-\2/'
 }
 
 # Remove packages that come with GHC
@@ -1609,6 +1607,7 @@ SETUPEOF
     if [ -d "\$src" ]; then
       cp -R "\$src"/* .
       #*/
+      cp "\$src/cabal.config.bak" \$out
     else
       tar xf "\$src" --strip=1
     fi
@@ -1923,11 +1922,25 @@ getReinstallableGlobals() {
   sed 's/  [ ]*/ /'
 }
 
+# Check /nix/store for a cabal.config.bak for this versioned
+# package. If not found, run cabal freeze, otherwise use the old
+# file. This is just used to get a list of transitive dependencies.
+freezeIfNeeded() {
+  local NAME=$(getMyFullName)
+  local d
+  for d in $(ls -d /nix/store/*-haskell-"$NAME" 2> /dev/null; ls -d /nix/store/*-haskell-"$NAME".4552 2> /dev/null); do
+    if [ -f "$d"/cabal.config.bak ]; then
+      cp "$d"/cabal.config.bak .
+      exit 0
+    fi
+  done
+  cabal freeze && mv cabal.config cabal.config.bak
+}
+
 # Freeze a cabal package, then tweak the ~cabal.config~ file to
 # cabbage patch references to globally installed packages.
 freezeCabbagePatch() {
-  cabal freeze && \
-    mv cabal.config cabal.config.bak && \
+  freezeIfNeeded && \
     ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config && \
     rm cabal.config.bak
 }
@@ -2145,15 +2158,6 @@ fi
 #+END_SRC
 
 * Tasks
-** TODO Cache cabal freeze output
-We can cache a ~cabal.config.bak~ file for a package. When looking
-things up in the cache, if we find such a file, check the hackage
-index for all dependencies to see if they have been modified since the
-creation of the config file. If not, re-use the cached
-file.
-
-Dealing with add-source dependencies could be a bit tricky. We could
-initially just not add such packages to the cache.
 ** TODO Cache cabbages
 Right now, we always download a package and we always generate a
 cabbage. What we could do is cache the downloaded source /and/ the
