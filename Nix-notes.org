@@ -1642,16 +1642,23 @@ EOF
 prepCabbage() {
   local d="$1"
   local dbPath="$2"
+  local FLAGS
   if [ -f cabbage.config ]; then
     local MYNAME=$(unversionPackageName "$d")
-    local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
-    if ! [ "$FLAGS" = "" ]; then
+    FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
+    if [ -n "$FLAGS" ]; then
       echo "Applying flags \"$FLAGS\" to $MYNAME"
       fixAllFlags "$FLAGS"
     fi
   fi
   cabal sandbox init --sandbox=../../.cabal-sandbox > /dev/null
-  freezeCabbagePatch > /dev/null
+
+  if [ -n "$FLAGS" ]; then
+    freezeCabbagePatch false > /dev/null
+  else
+    freezeCabbagePatch > /dev/null
+  fi
+
   if ! [ $? -eq 0 ]; then
     freezeWithConstraints ../../cabal.config
   else
