@@ -1607,7 +1607,9 @@ SETUPEOF
     if [ -d "\$src" ]; then
       cp -R "\$src"/* .
       #*/
-      cp "\$src/cabal.config.bak" \$out
+      if [ -f \$src/cabal.config.bak ]; then
+        cp "\$src/cabal.config.bak" \$out
+      fi
     else
       tar xf "\$src" --strip=1
     fi
