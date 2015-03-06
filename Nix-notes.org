@@ -1931,7 +1931,8 @@ freezeIfNeeded() {
   for d in $(ls -d /nix/store/*-haskell-"$NAME" 2> /dev/null; ls -d /nix/store/*-haskell-"$NAME".4552 2> /dev/null); do
     if [ -f "$d"/cabal.config.bak ]; then
       cp "$d"/cabal.config.bak .
-      exit 0
+      chmod u+w cabal.config.bak
+      return 0
     fi
   done
   cabal freeze && mv cabal.config cabal.config.bak
