@@ -189,8 +189,10 @@ BEGIN {
   } else if(downConfig) {
     downstream[$1] = $2;
   } else {
-    numUpstream++;
-    upstream[$1] = downstream[$1];
+    if($1 in downstream) {
+      numUpstream++;
+      upstream[$1] = downstream[$1];
+    }
   }
 }
 END {
@@ -524,9 +526,36 @@ filterOutWiredIn() {
 |integer-gmp-[[:digit:]])"
 }
 
+# Remove globally installed packages from consideration. First line of
+# input should be ghc-pkg list --global --simple-output
+filterOutGlobals2() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN {
+  firstLine = 1;
+}
+{
+  if(firstLine) {
+    split($0,arr," ");
+    for(i in arr) {
+      globallyInstalled[arr[i]] = 1;
+    }
+    firstLine = 0;
+  } else {
+      if(!($0 in globallyInstalled)) {
+        print($0);
+      }
+  }
+}
+EOF
+  awk "$AWK"
+}
+
 # Takes a cabal.config file and outputs a list of package names
 getDependencies() {
+  #(ghc-pkg list --global --simple-output; ((isolateAndCleanupConstraints < "$1") | getDependency | filterOutWiredIn)) | filterOutGlobals2
   (isolateAndCleanupConstraints < "$1") | getDependency | filterOutWiredIn
+
   if [ -f cabbage.config ]; then
     (isolateAndCleanupConstraints < cabbage.config) | getDependency | filterOutWiredIn
   fi
@@ -970,6 +999,112 @@ cabbagePatch() {
      rm "$CABAL".bak))
 }
 
+# Determines if a newer version of a globally installed package is
+# required. If so, the exit code is 1. If no globally-installed
+# package is to be upgraded, the exit code is 0.
+upgradesGlobal() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN {
+  firstLine = 1;
+  inConstraints = 0;
+}
+/^[Cc]onstraints:/ {
+  inConstraints = 1;
+  gsub(/^[Cc]onstraints:/,"",$0);
+}
+{
+  if(firstLine) {
+    split($0,arr," ");
+    for(i in arr) {
+      match(arr[i], /-[[:digit:].]*$/);
+      pkg = substr(arr[i], 1, RSTART-1);
+      ver = substr(arr[i],RSTART+1);
+      globallyInstalled[pkg] = ver;
+    }
+    firstLine = 0;
+  } else if(inConstraints) {
+    if(match($0, /^[[:space:]]/)) {
+      inConstraints = 2;
+      match($0, /^[[:space:]]*/);
+      sub(/^[[:space:]]*/,"",$0);
+      match($0, " ==");
+      pkgName = substr($0, 1, RSTART - 1);
+      versionStart = RSTART + 3;
+      sub(/,/,"",$0);
+      pkgVersion = substr($0, versionStart);
+      versioned = sprintf("%s-%s",pkgName,pkgVersion);
+      if(pkgName in globallyInstalled) {
+        if(globallyInstalled[pkgName] != pkgVersion) {
+          exit 1;
+        }
+      }
+    } else {
+      inConstraints = 0;
+    }
+  }
+}
+EOF
+  awk "$AWK"
+}
+
+# Takes a first line that is "ghc-pkg list --global --simple-output"
+# and then a piped cabal.config. Globally-installed packages are
+# removed from the dependency list. If any globally-installed package
+# is updated, then they must all be cabbage patched.
+filterOutGlobals() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN {
+  firstLine = 1;
+  inConstraints = 0;
+}
+/^[Cc]onstraints:/ {
+  inConstraints = 1;
+  printf("constraints:");
+  gsub(/^[Cc]onstraints:/,"",$0);
+}
+{
+  if(firstLine) {
+    split($0,arr," ");
+    for(i in arr) {
+      globallyInstalled[arr[i]] = 1;
+    }
+    firstLine = 0;
+  } else if(inConstraints) {
+    if(match($0, /^[[:space:]]/)) {
+      inConstraints = 2;
+      match($0, /^[[:space:]]*/);
+      spacePrefix = RLENGTH;
+      sub(/^[[:space:]]*/,"",$0);
+      match($0, " ==");
+      pkgName = substr($0, 1, RSTART - 1);
+      versionStart = RSTART + 3;
+      hasComma = 0;
+      if(match($0, ",")) {
+        hasComma = 1;
+      }
+      sub(/,/,"",$0);
+      pkgVersion = substr($0, versionStart);
+      versioned = sprintf("%s-%s",pkgName,pkgVersion);
+      if(!(versioned in globallyInstalled)) {
+        for(i = 0; i < spacePrefix; ++i) printf(" ");
+        printf("%s", $0);
+        if(hasComma) printf(",\n");
+        else printf("\n");
+      }
+    } else {
+      inConstraints = 0;
+      print($0);
+    }
+  } else {
+    print($0);
+  }
+}
+EOF
+  awk "$AWK"
+}
+
 # Tweaks the constraints in a piped ~cabal.config~ file to replace
 # globally installed packages with cabbage patched versions.
 cabbagePatchConfig() {
@@ -1027,9 +1162,10 @@ EOF
 }
 
 # Print the list of globally installed packages that can be
-# reinstalled.
+# reinstalled. If this package depends on GHC as a library, we can't
+# reinstall anything.
 getReinstallableGlobals() {
-  ghc-pkg list --global --simple-output | \
+  #ghc-pkg list --global --simple-output | \
   sed -e 's/base-[[:digit:].]*//' \
       -e 's/bin-package-db-[[:digit:].]*//' \
       -e 's/rts-[[:digit:].]*//' \
@@ -1067,8 +1203,15 @@ freezeCabbagePatch() {
   else
     freezeIfNeeded
   fi
-  ((getReinstallableGlobals; cat cabal.config.bak) | cabbagePatchConfig) > cabal.config && \
-    rm cabal.config.bak
+
+  local GLOBALS=$(ghc-pkg list --global --simple-output)
+  (echo "$GLOBALS"; cat cabal.config.bak) | upgradesGlobal
+  if [ $? -eq 1 ]; then
+    (((echo "$GLOBALS" | getReinstallableGlobals); cat cabal.config.bak) | cabbagePatchConfig) > cabal.config
+  else
+    ((echo "$GLOBALS"; cat cabal.config.bak) | filterOutGlobals) > cabal.config
+  fi
+  rm cabal.config.bak
 }
 
 # Takes a versioned file name, e.g. "foo-0.8.2",
