@@ -339,7 +339,7 @@ freezeUnconstrained() {
   (cat "$REALCABAL" | sed 's/--.*$//' | unconstrainCabal) > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
   mv cabbageDummy.cabal "$REALCABAL"
-  freezeCabbagePatch
+  freezeCabbagePatch 1
   local OK=$?
   return $OK
 }
@@ -439,7 +439,7 @@ BEGIN {
   downConfig = 1;
   numUpstream = 0;
 }
-{ 
+{
   if($1 == "***") {
     downConfig = 0;
   } else if(downConfig) {
@@ -1144,31 +1144,6 @@ filterOutWiredIn() {
 |integer-gmp-[[:digit:]])"
 }
 
-# Remove globally installed packages from consideration. First line of
-# input should be ghc-pkg list --global --simple-output
-filterOutGlobals2() {
-  local AWK
-  read -r -d '' AWK<<'EOF'
-BEGIN {
-  firstLine = 1;
-}
-{
-  if(firstLine) {
-    split($0,arr," ");
-    for(i in arr) {
-      globallyInstalled[arr[i]] = 1;
-    }
-    firstLine = 0;
-  } else {
-      if(!($0 in globallyInstalled)) {
-        print($0);
-      }
-  }
-}
-EOF
-  awk "$AWK"
-}
-
 # Takes a cabal.config file and outputs a list of package names
 getDependencies() {
   (isolateAndCleanupConstraints < "$1") | getDependency | filterOutWiredIn
@@ -1689,7 +1664,7 @@ prepCabbage() {
   cabal sandbox init --sandbox=../../.cabal-sandbox > /dev/null
 
   if [ -n "$FLAGS" ]; then
-    freezeCabbagePatch false > /dev/null
+    freezeCabbagePatch 0 > /dev/null
   else
     freezeCabbagePatch > /dev/null
   fi
@@ -1730,7 +1705,7 @@ mkCabbages() {
   if [ "$1" = true ]; then
     freezeConsolidatedCabal ./*.cabal
   else
-    freezeCabbagePatch
+    freezeCabbagePatch 1
     if ! [ $? -eq 0 ]; then
       if [ "$2" = false ]; then
         echo "Trying emergency constraint patch..."
@@ -1852,7 +1827,7 @@ freezeConsolidatedCabal() {
   local REALCABAL=$(basename "$(ls ./*.cabal)")
   (cat "$REALCABAL" | testBenchExecutable) > cabbageDummy.cabal
   mv "$REALCABAL" cabbageBackup.bak
-  freezeCabbagePatch false
+  freezeCabbagePatch 1
   mv cabbageBackup.bak "$REALCABAL"
   rm cabbageDummy.cabal
 }
@@ -1934,6 +1909,7 @@ BEGIN {
       versioned = sprintf("%s-%s",pkgName,pkgVersion);
       if(pkgName in globallyInstalled) {
         if(globallyInstalled[pkgName] != pkgVersion) {
+          print(versioned, "is an upgrade from the global package database");
           exit 1;
         }
       }
@@ -1956,6 +1932,7 @@ filterOutGlobals() {
 BEGIN {
   firstLine = 1;
   inConstraints = 0;
+  firstConstraint = 1;
 }
 /^[Cc]onstraints:/ {
   inConstraints = 1;
@@ -1978,18 +1955,17 @@ BEGIN {
       match($0, " ==");
       pkgName = substr($0, 1, RSTART - 1);
       versionStart = RSTART + 3;
-      hasComma = 0;
-      if(match($0, ",")) {
-        hasComma = 1;
-      }
       sub(/,/,"",$0);
       pkgVersion = substr($0, versionStart);
       versioned = sprintf("%s-%s",pkgName,pkgVersion);
       if(!(versioned in globallyInstalled)) {
-        for(i = 0; i < spacePrefix; ++i) printf(" ");
-        printf("%s", $0);
-        if(hasComma) printf(",\n");
-        else printf("\n");
+        if(firstConstraint) {
+          printf(" ");
+          firstConstraint = 0;
+        } else {
+          for(i = 0; i < spacePrefix; ++i) printf(" ");
+        }
+        printf("%s,\n", $0);
       }
     } else {
       inConstraints = 0;
@@ -2096,24 +2072,41 @@ freezeIfNeeded() {
 freezeCabbagePatch() {
   if [ "$#" -gt 0 ]; then
     cabal freeze && mv cabal.config cabal.config.bak
+
+    if [ $1 -eq 1 ]; then
+      # If a globally-installed package must be upgraded, then we cabbage
+      # patch the build plan to allow us to shadow globally-installed
+      # packages. Otherwise, we do not mention globally-installed packages
+      # in the Nix build plan as GHC will pull them in by default.
+      local GLOBALS=$(ghc-pkg list --global --simple-output)
+      (echo "$GLOBALS"; cat cabal.config.bak) | upgradesGlobal
+      if [ $? -eq 1 ]; then
+        (((echo "$GLOBALS" | getReinstallableGlobals); cat cabal.config.bak) | cabbagePatchConfig) > cabal.config
+        rm cabal.config.bak
+      else
+        ((echo "$GLOBALS"; cat cabal.config.bak) | filterOutGlobals | sed '$ s/,//') > cabal.config
+        # mv cabal.config.bak cabal.config
+      fi
+    else
+      mv cabal.config.bak cabal.config
+    fi
   else
     freezeIfNeeded
+    mv cabal.config.bak cabal.config
   fi
-
-  # If a globally-installed package must be upgraded, then we cabbage
-  # patch the build plan to allow us to shadow globally-installed
-  # packages. Otherwise, we do not mention globally-installed packages
-  # in the Nix build plan as GHC will pull them in by default.
-  local GLOBALS=$(ghc-pkg list --global --simple-output)
-  (echo "$GLOBALS"; cat cabal.config.bak) | upgradesGlobal
-  if [ $? -eq 1 ]; then
-    (((echo "$GLOBALS" | getReinstallableGlobals); cat cabal.config.bak) | cabbagePatchConfig) > cabal.config
-  else
-    ((echo "$GLOBALS"; cat cabal.config.bak) | filterOutGlobals) > cabal.config
-  fi
-  rm cabal.config.bak
 }
 #+END_SRC
+
+** Notes on Globally Installed Packages
+
+If a globally-installed package is to be upgraded, we cabbage patch
+/all/ upgradeable globally-installed packages so that they can have
+alternate build plans. If /no/ globally-installed package is to be
+upgraded, we do not cabbage patch, and in fact remove
+globally-installed packages from the downstream package's constraints
+list. This lets us build things that depend upon GHC as a library, as
+well as things that want to update packages that GHC itself depends
+on.
 
 * Top-level
 
