@@ -686,12 +686,15 @@ EOF
   fi
 
   local SYNOPSIS=$(getSynopsis)
-  local SYSTEMDEPS
+  local SYSTEMDEPS=""
+
   if [ -f ../../cabbage.config ]; then
     local MYNAME=$(unversionPackageName "$2")
     SYSTEMDEPS=$(cat ../../cabbage.config | systemDepsFor "$MYNAME")
-  else
-    SYSTEMDEPS=""
+  fi
+  if [ -f cabbage.config ]; then
+    local MYNAME=$(unversionPackageName "$2")
+    SYSTEMDEPS=$(cat cabbage.config | systemDepsFor "$MYNAME")
   fi
 
   local TOOLS=($(allBuildTools))
