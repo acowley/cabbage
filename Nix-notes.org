@@ -2359,3 +2359,6 @@ meantime, these can be manually specified a ~cabbage.config~ file.
 ** TODO Support pkg-config
 If a cabal package has a ~pkgconfig-depends~ field, then we need to
 add ~pkg-config~ as a ~buildInput~ along with the actual packages.
+** TODO Pull out "special" build-tool support
+Just search for "special" to see each place we filter out un-buildable
+build tools (i.e. those that come with GHC).
