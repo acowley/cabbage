@@ -2149,23 +2149,19 @@ defaultShell() {
   local NIX
   IFS=$'\n' read -r -d '' NIX <<EOF
 let pkgs = import <nixpkgs> {};
-    haskellBuildTools = with pkgs;
-                        [ ghc.ghc784
-                          haskellPackages.cabalInstall_1_20_0_6 ];
-    happy = pkgs.haskellngPackages.happy;
-    alex = pkgs.haskellngPackages.alex;
-    callPackage = pkgs.lib.callPackageWith (pkgs // {inherit happy alex callPackage$TOOLSDEPS;});
+    mynix = import <mynix>;
+    haskellBuildTools = with mynix; [ ghcDefault cabalDefault ];
 $(if [ "${#TOOLS[@]}" -gt 0 ]; then
     local t
     for t in "${TOOLS[@]}"; do
       local buildTool=$(basename $(find .cabbages -name "$t-[[:digit:].]*" -depth 1))
-      echo "    $t = callPackage .cabbages/$buildTool/default.nix {"
+      echo "    $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
       echo "      inherit pkgs haskellBuildTools;"
       echo "    };"
     done
   fi)
-in callPackage ./default.nix {
-   inherit pkgs haskellBuildTools;
+in pkgs.callPackage ./default.nix {
+   inherit pkgs haskellBuildTools $(echo "${TOOLS[@]}");
 }
 EOF
   echo "$NIX"
