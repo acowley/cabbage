@@ -1469,13 +1469,25 @@ getSynopsis
 # directory).
 callCabbages() {
   local -a NAMES=("${!1}")
-  local PKGS
   local -a PKGS=("${!2}")
   local i
 
   for ((i = 0; i < ${#NAMES[@]}; ++i)); do
+    local TOOLSARR=($(cd .cabbages/${PKGS[$i]} && cabalBuildTools))
+    local TOOLS=""
+    if [ ${#TOOLSARR[@]} -gt 0 ]; then
+      for special in hsc2hs ghc; do
+        local j=$(findIndex "$special" TOOLSARR[@])
+        if [ "$j" -gt -1 ]; then
+          unset TOOLSARR[$j]
+        fi
+      done
+      if [ ${#TOOLSARR[@]} -gt 0 ]; then
+        TOOLS=" $(echo ${TOOLSARR[@]})"
+      fi
+    fi
     echo "      ${NAMES[$i]} = callPackage .cabbages/${PKGS[$i]} {"
-    echo "        inherit frozenCabbages haskellBuildTools pkgs;"
+    echo "        inherit frozenCabbages haskellBuildTools pkgs$TOOLS;"
     echo "      };"
   done
 }
