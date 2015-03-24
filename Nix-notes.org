@@ -210,7 +210,7 @@ allBuildTools() {
 
   # hsc2hs comes with GHC
   local special
-  for special in hsc2hs; do
+  for special in hsc2hs ghc; do
     local i=$(findIndex "$special" TOOLS[@])
     if [ "$i" -gt -1 ]; then
       unset TOOLS[$i]
@@ -219,14 +219,14 @@ allBuildTools() {
   echo "${TOOLS[@]}"
 }
 
-# Print the array of all buildable build-tools (ie not happy, alex, or
-# hsc2hs) used to build this package and all of its dependencies.
+# Print the array of all buildable build-tools (ie not hsc2hs or ghc)
+# used to build this package and all of its dependencies.
 allBuildableBuildTools() {
   local TOOLS=($(allBuildToolsAux | uniq))
 
-  # We don't build alex, happy, or hsc2hs
+  # We don't build hsc2hs or ghc
   local special
-  for special in alex happy hsc2hs; do
+  for special in hsc2hs ghc; do
     local i=$(findIndex "$special" TOOLS[@])
     if [ "$i" -gt -1 ]; then
       unset TOOLS[$i]
