@@ -1631,18 +1631,19 @@ SETUPEOF
       cp -R "\$src"/* .
       #*/
       if [ -f \$src/cabal.config.bak ]; then
-        cp "\$src/cabal.config.bak" \$out
+        mkdir \$out/.cabbageCache
+        cp "\$src/cabal.config.bak" "\$out/.cabbageCache/cabal.config.bak"
       fi
     else
       tar xf "\$src" --strip=1
     fi
 
     chmod -R u+w .
-    \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init -v0
     if [ -d dist ]; then
       # Copy pre-generated dist files to store
       cp -R dist \$out
     fi
+    \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init -v0
     mkdir -p \$out/.cabal-sandbox/lib/$1
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
@@ -2071,8 +2072,8 @@ freezeIfNeeded() {
   local NAME=$(getMyFullName)
   local d
   for d in $(ls -d /nix/store/*-haskell-"$NAME" 2> /dev/null; ls -d /nix/store/*-haskell-"$NAME".4552 2> /dev/null); do
-    if [ -f "$d"/cabal.config.bak ]; then
-      cp "$d"/cabal.config.bak .
+    if [ -f "$d"/.cabbageCache/cabal.config.bak ]; then
+      cp "$d"/.cabbageCache/cabal.config.bak ./cabal.config.bak
       chmod u+w cabal.config.bak
       return 0
     fi
