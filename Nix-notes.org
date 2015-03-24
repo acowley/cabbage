@@ -1639,6 +1639,10 @@ SETUPEOF
 
     chmod -R u+w .
     \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init -v0
+    if [ -d dist ]; then
+      # Copy pre-generated dist files to store
+      cp -R dist \$out
+    fi
     mkdir -p \$out/.cabal-sandbox/lib/$1
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
