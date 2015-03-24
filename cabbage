@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+
 # Print only the library target portion of a .cabal file and filter
 # out linen comments.
 isolateLibraryTarget() {
@@ -67,7 +68,7 @@ allBuildTools() {
 
   # hsc2hs comes with GHC
   local special
-  for special in hsc2hs; do
+  for special in hsc2hs ghc; do
     local i=$(findIndex "$special" TOOLS[@])
     if [ "$i" -gt -1 ]; then
       unset TOOLS[$i]
@@ -76,14 +77,14 @@ allBuildTools() {
   echo "${TOOLS[@]}"
 }
 
-# Print the array of all buildable build-tools (ie not happy, alex, or
-# hsc2hs) used to build this package and all of its dependencies.
+# Print the array of all buildable build-tools (ie not hsc2hs) used to
+# build this package and all of its dependencies.
 allBuildableBuildTools() {
   local TOOLS=($(allBuildToolsAux | uniq))
 
-  # We don't build alex, happy, or hsc2hs
+  # We don't build hsc2hs
   local special
-  for special in alex happy hsc2hs; do
+  for special in hsc2hs ghc; do
     local i=$(findIndex "$special" TOOLS[@])
     if [ "$i" -gt -1 ]; then
       unset TOOLS[$i]
@@ -620,13 +621,25 @@ getSynopsis() {
 # directory).
 callCabbages() {
   local -a NAMES=("${!1}")
-  local PKGS
   local -a PKGS=("${!2}")
   local i
 
   for ((i = 0; i < ${#NAMES[@]}; ++i)); do
+    local TOOLSARR=($(cd .cabbages/${PKGS[$i]} && cabalBuildTools))
+    local TOOLS=""
+    if [ ${#TOOLSARR[@]} -gt 0 ]; then
+      for special in hsc2hs ghc; do
+        local j=$(findIndex "$special" TOOLSARR[@])
+        if [ "$j" -gt -1 ]; then
+          unset TOOLSARR[$j]
+        fi
+      done
+      if [ ${#TOOLSARR[@]} -gt 0 ]; then
+        TOOLS=" $(echo ${TOOLSARR[@]})"
+      fi
+    fi
     echo "      ${NAMES[$i]} = callPackage .cabbages/${PKGS[$i]} {"
-    echo "        inherit frozenCabbages haskellBuildTools pkgs;"
+    echo "        inherit frozenCabbages haskellBuildTools pkgs$TOOLS;"
     echo "      };"
   done
 }
@@ -792,13 +805,18 @@ SETUPEOF
       cp -R "\$src"/* .
       #*/
       if [ -f \$src/cabal.config.bak ]; then
-        cp "\$src/cabal.config.bak" \$out
+        mkdir \$out/.cabbageCache
+        cp "\$src/cabal.config.bak" "\$out/.cabbageCache/cabal.config.bak"
       fi
     else
       tar xf "\$src" --strip=1
     fi
 
     chmod -R u+w .
+    if [ -d dist ]; then
+      # Copy pre-generated dist files to store
+      cp -R dist \$out
+    fi
     \${cabalTmp} sandbox --sandbox=\$out/.cabal-sandbox init -v0
     mkdir -p \$out/.cabal-sandbox/lib/$1
     eval "\$cmds"
@@ -1157,8 +1175,8 @@ freezeIfNeeded() {
   local NAME=$(getMyFullName)
   local d
   for d in $(ls -d /nix/store/*-haskell-"$NAME" 2> /dev/null; ls -d /nix/store/*-haskell-"$NAME".4552 2> /dev/null); do
-    if [ -f "$d"/cabal.config.bak ]; then
-      cp "$d"/cabal.config.bak .
+    if [ -f "$d"/.cabbageCache/cabal.config.bak ]; then
+      cp "$d"/.cabbageCache/cabal.config.bak ./cabal.config.bak
       chmod u+w cabal.config.bak
       return 0
     fi
@@ -1252,23 +1270,19 @@ defaultShell() {
   local NIX
   IFS=$'\n' read -r -d '' NIX <<EOF
 let pkgs = import <nixpkgs> {};
-    haskellBuildTools = with pkgs;
-                        [ ghc.ghc784
-                          haskellPackages.cabalInstall_1_20_0_6 ];
-    happy = pkgs.haskellngPackages.happy;
-    alex = pkgs.haskellngPackages.alex;
-    callPackage = pkgs.lib.callPackageWith (pkgs // {inherit happy alex callPackage$TOOLSDEPS;});
+    mynix = import <mynix>;
+    haskellBuildTools = with mynix; [ ghcDefault cabalDefault ];
 $(if [ "${#TOOLS[@]}" -gt 0 ]; then
     local t
     for t in "${TOOLS[@]}"; do
       local buildTool=$(basename $(find .cabbages -name "$t-[[:digit:].]*" -depth 1))
-      echo "    $t = callPackage .cabbages/$buildTool/default.nix {"
+      echo "    $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
       echo "      inherit pkgs haskellBuildTools;"
       echo "    };"
     done
   fi)
-in callPackage ./default.nix {
-   inherit pkgs haskellBuildTools;
+in pkgs.callPackage ./default.nix {
+   inherit pkgs haskellBuildTools $(echo "${TOOLS[@]}");
 }
 EOF
   echo "$NIX"
