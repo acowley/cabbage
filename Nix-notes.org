@@ -127,9 +127,7 @@ environment.
 
 * Shebang
 Put a shebang line at the top of our tangled program.
-
-#+BEGIN_SRC sh :tangle cabbage :padline no
-#!/usr/bin/env bash
+#+BEGIN_SRC sh :tangle cabbage :shebang "#!/usr/bin/env bash" :padline no
 #+END_SRC
 
 * Cabal file helpers
