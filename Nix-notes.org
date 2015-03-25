@@ -2362,3 +2362,13 @@ add ~pkg-config~ as a ~buildInput~ along with the actual packages.
 ** TODO Pull out "special" build-tool support
 Just search for "special" to see each place we filter out un-buildable
 build tools (i.e. those that come with GHC).
+** TODO Build tools that need build tools
+=c2hs=, for example, needs both =happy= and =alex=. The way cabbage
+currently works, those tools end up in =c2hs='s =.cabbage= directory,
+but then =c2hs='s =default.nix= needs them as arguments. So what we
+have to do is call the build tool packages in the top-level
+=shell.nix=, and pass them to =c2hs= when we call it from the
+top-level =shell.nix=.
+** TODO Unpack frozenCabbages
+The next big step is to not pass the entire set of packages to each
+dependency, but only the ones that are needed.
