@@ -148,7 +148,7 @@ cabalFileExists() {
 }
 
 # Print only the library target portion of a .cabal file and filter
-# out linen comments.
+# out line comments.
 isolateLibraryTarget() {
   sed -n '/^[Ll]ibrary/,/^[^[:space:]]/ { /^[[Ll]ibrary/p; /^[[:space:]]/p; }' \
   | sed 's/--.*$//'
