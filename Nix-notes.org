@@ -326,6 +326,65 @@ cabalFrameworks() {
 }
 #+END_SRC
 
+** cabal install --dependencies-only --dry-run
+Rather than using =cabal-freeze=, we can run =cabal install
+--dependencies-only --dry-run= in a fresh sandbox to obtain a list of
+all dependencies not available in the global database.
+
+#+NAME: dryDependencies
+#+BEGIN_SRC sh : exports code :tangle cabbage
+dryDependencies() {
+  sed -n '3,$ p' | sed 's/ .*$//' | sed 's/\([-_[:alpha:]]*\)-\([[:digit:].]*\)$/\1 \2/'
+}
+#+END_SRC
+
+*** Test
+#+BEGIN_SRC sh :noweb yes :results output
+<<dryDependencies>>
+cd ../GLUtil
+cabal install --dependencies-only --dry-run | dryDependencies
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+ObjectName 1.1.0.0
+OpenGLRaw 2.4.1.0
+GLURaw 1.5.0.0
+cereal 0.4.1.1
+mtl 2.1.3.1
+parallel 3.2.0.6
+prelude-extras 0.4
+primitive 0.5.4.0
+reflection 1.5.1.2
+stm 2.4.4
+StateVar 1.1.0.0
+tagged 0.7.3
+text 1.2.0.4
+OpenGL 2.12.0.0
+hashable 1.2.3.2
+nats 1
+transformers-compat 0.4.0.4
+distributive 0.4.4
+exceptions 0.8.0.2
+unordered-containers 0.2.5.1
+semigroups 0.16.2.2
+vector 0.10.12.2
+void 0.7
+bytes 0.15
+contravariant 1.3.1
+comonad 4.2.5
+semigroupoids 4.3
+bifunctors 4.2.1
+profunctors 4.4.1
+free 4.11
+adjunctions 4.2
+kan-extensions 4.2.1
+lens 4.8
+linear 1.18.0.1
+zlib 0.5.4.2
+JuicyPixels 3.2.3
+#+end_example
+
 ** Unconstrained
 As a last-ditch effort to freeze a build plan, we can remove all
 version constraints. This is needed for the hsc2hs build too.
