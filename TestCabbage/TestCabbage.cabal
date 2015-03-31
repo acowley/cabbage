@@ -16,6 +16,6 @@ library
   exposed-modules:     TestCabbage
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base >=4.7 && <4.8
+  build-depends:       base >=4.7 && <4.9, array
   -- hs-source-dirs:      
   default-language:    Haskell2010

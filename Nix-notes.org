@@ -136,6 +136,17 @@ Tooling for working with .cabal files.
 #+NAME: cabalHelpers
 #+BEGIN_SRC sh :exports code :tangle cabbage
 
+cabalFileExists() {
+  local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
+  if [ "$NUMCABALS" -gt 1 ]; then
+    return 2
+  elif [ "$NUMCABALS" -eq 1 ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 # Print only the library target portion of a .cabal file and filter
 # out linen comments.
 isolateLibraryTarget() {
@@ -174,7 +185,9 @@ EOF
 # Print the library target of any .cabal file in the current directory
 # while removing any blocks guarded by a windows or solaris check.
 cabalLibraryTarget() {
-  cat ./*.cabal | sed 's/--.*$//' | isolateLibraryTarget | removeWindowsBlocks
+  if cabalFileExists ; then
+    cat ./*.cabal | sed 's/--.*$//' | isolateLibraryTarget | removeWindowsBlocks
+  fi
 }
 #+END_SRC
 
@@ -186,9 +199,11 @@ Pick out all build-tools used by a package and all of its dependencies.
 
 # Print each build-tool without any version constraint.
 cabalBuildTools() {
-  cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
-  | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
+  if cabalFileExists ; then
+    cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
+    | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
 /' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
+  fi
 }
 
 allBuildToolsAux() {
@@ -209,22 +224,6 @@ allBuildTools() {
   local TOOLS=($(allBuildToolsAux | uniq))
 
   # hsc2hs comes with GHC
-  local special
-  for special in hsc2hs ghc; do
-    local i=$(findIndex "$special" TOOLS[@])
-    if [ "$i" -gt -1 ]; then
-      unset TOOLS[$i]
-    fi
-  done
-  echo "${TOOLS[@]}"
-}
-
-# Print the array of all buildable build-tools (ie not hsc2hs or ghc)
-# used to build this package and all of its dependencies.
-allBuildableBuildTools() {
-  local TOOLS=($(allBuildToolsAux | uniq))
-
-  # We don't build hsc2hs or ghc
   local special
   for special in hsc2hs ghc; do
     local i=$(findIndex "$special" TOOLS[@])
@@ -704,8 +703,8 @@ isolateConstraints() {
 }
 
 isolateAndCleanupConstraints() {
-  isolateConstraints | sed -e 's/^[Cc]onstraints: //' -e 's/^[[:space:]]*//' \
-  | sed 's/\([-_[:alpha:]]*\) ==\([[:digit:].]*\),*$/\1 \2/'
+  isolateConstraints | sed -e 's/^[Cc]onstraints:[[:space:]]*//' -e 's/^[[:space:]]*//' \
+  | sed 's/\([-_[:alpha:]]*\) ==\([[:digit:].]*\),*$/\1 \2/' | sed '/^$/d'
 }
 #+END_SRC
 
@@ -896,8 +895,10 @@ guarded behind one of "if os(windows)", "os(solaris)", or "os(ios)".
 # Prints the extra-libraires from a cabal file iff they occur in a
 # library target.
 cabalExtraLibraries() {
-  cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
-  grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
+  if cabalFileExists ; then
+    cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
+    grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
+  fi
 }
 
 # Looks in a cabal.config file to identify all dependencies, then
@@ -1154,10 +1155,14 @@ getDependencies() {
 #+BEGIN_SRC sh :results output :noweb yes
 <<isolateConstraints>>
 <<getDependencyNames>>
-cd ~/temp/rifactor
-getDependencies cabal.config
+cd TempCabbage
+DEPS=($(getDependencies cabal.config))
+echo "We have ${#DEPS[@]} dependencies: ${DEPS[@]}"
 #cat cabal.confg | isolateConstraints
 #+END_SRC
+
+#+RESULTS:
+: We have 0 dependencies: 
 
 *** Quick tests
 
@@ -1473,18 +1478,10 @@ callCabbages() {
   local i
 
   for ((i = 0; i < ${#NAMES[@]}; ++i)); do
-    local TOOLSARR=($(cd .cabbages/${PKGS[$i]} && cabalBuildTools))
+    local TOOLSARR=($(cd .cabbages/${PKGS[$i]} && allBuildTools))
     local TOOLS=""
     if [ ${#TOOLSARR[@]} -gt 0 ]; then
-      for special in hsc2hs ghc; do
-        local j=$(findIndex "$special" TOOLSARR[@])
-        if [ "$j" -gt -1 ]; then
-          unset TOOLSARR[$j]
-        fi
-      done
-      if [ ${#TOOLSARR[@]} -gt 0 ]; then
-        TOOLS=" $(echo ${TOOLSARR[@]})"
-      fi
+      TOOLS=" $(echo ${TOOLSARR[@]})"
     fi
     echo "      ${NAMES[$i]} = callPackage .cabbages/${PKGS[$i]} {"
     echo "        inherit frozenCabbages haskellBuildTools pkgs$TOOLS;"
@@ -1503,7 +1500,7 @@ mkCabbage() {
   local LINKSANDBOX
   local DEPS=($(getDependencies cabal.config))
 
-  local DEPNAMES
+  local DEPNAMES=()
   local i
   for ((i=0; i < ${#DEPS[@]}; ++i)); do
     # Remove version number from dependency name
@@ -1760,7 +1757,7 @@ mkCabbages() {
   done
   popd > /dev/null
 
-  local BUILDTOOLS=($(allBuildableBuildTools))
+  local BUILDTOOLS=($(allBuildTools))
 
   if [ "${#BUILDTOOLS}" -gt 0 ]; then
     echo "Making cabbages for build-tools"
@@ -2138,7 +2135,7 @@ This expression is suitable for ~nix-shell~ or to be installed itself.
 
 # A default Nix expression suitable for nix-shell or installation.
 defaultShell() {
-  local TOOLS=($(allBuildableBuildTools))
+  local TOOLS=($(allBuildTools))
 
   local TOOLSDEPS
   if [ "${#TOOLS[@]}" -gt 0 ]; then
