@@ -186,7 +186,7 @@ Pick out all build-tools used by a package and all of its dependencies.
 
 # Print each build-tool without any version constraint.
 cabalBuildTools() {
-  cabalLibraryTarget \
+  cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
   | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
 /' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
 }
