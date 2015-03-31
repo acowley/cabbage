@@ -189,7 +189,64 @@ cabalLibraryTarget() {
     cat ./*.cabal | sed 's/--.*$//' | isolateLibraryTarget | removeWindowsBlocks
   fi
 }
+
+# Print out a .cabal file starting with a pkgconfig-depends line.
+pkgconfigDependsStarts() {
+  if cabalFileExists ; then
+    cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
+  fi
+}
+
+# Pull all pkgconfig dependencies from a .cabal file
+pkgconfigDepends() {
+  pkgconfigDependsStarts | stanzaHead \
+ | sed -e 's/[Pp]kg[Cc]onfig-[Dd]epends:[[:space:]]*//' -e 's/,/\
+ /g' | sed 's/^[[:space:]]*//' | sed '/^$/d'
+}
+
+# Take all lines until the next Cabal file stanza begins. The
+# assumption is that the first line is the beginning of a stanza, so
+# its indentation level determines where the next stanza begins.
+stanzaHead() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN { firstLine = 1; }
+{
+  if(firstLine) {
+    match($0, /^[[:space:]]*/);
+    stanzaIndent = RLENGTH;
+    print $0;
+    firstLine = 0;
+  } else {
+    match($0, /^[[:space:]]*/);
+    if(RLENGTH <= stanzaIndent) {
+      exit;
+    } else {
+      print $0;
+    }
+  }
+}
+EOF
+  awk "$AWK"
+  
+}
 #+END_SRC
+
+** pkgconfig test
+#+BEGIN_SRC sh :results output :noweb yes
+<<cabalHelpers>>
+cd ../ffmpeg-light
+pkgconfigDepends
+PKGS=($(pkgconfigDepends))
+echo "There are ${#PKGS[@]} pkg deps"
+#+END_SRC
+
+#+RESULTS:
+: libavutil
+: libavformat
+: libavcodec
+: libswscale
+: There are 4 pkg deps
 
 ** Build-tools
 Pick out all build-tools used by a package and all of its dependencies.
@@ -1554,6 +1611,11 @@ EOF
     local MYNAME=$(unversionPackageName "$2")
     SYSTEMDEPS=$(cat cabbage.config | systemDepsFor "$MYNAME")
   fi
+  local PKGS=($(pkgconfigDepends))
+
+  if [ "${#PKGS[@]}" -gt 0 ]; then
+    SYSTEMDEPS="$SYSTEMDEPS pkgconfig"
+  fi
 
   local TOOLS=($(allBuildTools))
   local TOOLSDEPS=""
@@ -2353,19 +2415,3 @@ mentions ~z~. This system dependency, ~libz~, is provided by the
 nixpkgs package, ~zlib~. It would be nice to parse these out of .cabal
 files automatically and map them to nixpkgs package names. In the
 meantime, these can be manually specified a ~cabbage.config~ file.
-** TODO Support pkg-config
-If a cabal package has a ~pkgconfig-depends~ field, then we need to
-add ~pkg-config~ as a ~buildInput~ along with the actual packages.
-** TODO Pull out "special" build-tool support
-Just search for "special" to see each place we filter out un-buildable
-build tools (i.e. those that come with GHC).
-** TODO Build tools that need build tools
-=c2hs=, for example, needs both =happy= and =alex=. The way cabbage
-currently works, those tools end up in =c2hs='s =.cabbage= directory,
-but then =c2hs='s =default.nix= needs them as arguments. So what we
-have to do is call the build tool packages in the top-level
-=shell.nix=, and pass them to =c2hs= when we call it from the
-top-level =shell.nix=.
-** TODO Unpack frozenCabbages
-The next big step is to not pass the entire set of packages to each
-dependency, but only the ones that are needed.

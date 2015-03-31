@@ -55,6 +55,47 @@ cabalLibraryTarget() {
   fi
 }
 
+# Print out a .cabal file starting with a pkgconfig-depends line.
+pkgconfigDependsStarts() {
+  if cabalFileExists ; then
+    cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
+  fi
+}
+
+# Pull all pkgconfig dependencies from a .cabal file
+pkgconfigDepends() {
+  pkgconfigDependsStarts | stanzaHead \
+ | sed -e 's/[Pp]kg[Cc]onfig-[Dd]epends:[[:space:]]*//' -e 's/,/\
+ /g' | sed 's/^[[:space:]]*//' | sed '/^$/d'
+}
+
+# Take all lines until the next Cabal file stanza begins. The
+# assumption is that the first line is the beginning of a stanza, so
+# its indentation level determines where the next stanza begins.
+stanzaHead() {
+  local AWK
+  read -r -d '' AWK<<'EOF'
+BEGIN { firstLine = 1; }
+{
+  if(firstLine) {
+    match($0, /^[[:space:]]*/);
+    stanzaIndent = RLENGTH;
+    print $0;
+    firstLine = 0;
+  } else {
+    match($0, /^[[:space:]]*/);
+    if(RLENGTH <= stanzaIndent) {
+      exit;
+    } else {
+      print $0;
+    }
+  }
+}
+EOF
+  awk "$AWK"
+  
+}
+
 # Print each build-tool without any version constraint.
 cabalBuildTools() {
   if cabalFileExists ; then
@@ -701,6 +742,11 @@ EOF
   if [ -f cabbage.config ]; then
     local MYNAME=$(unversionPackageName "$2")
     SYSTEMDEPS=$(cat cabbage.config | systemDepsFor "$MYNAME")
+  fi
+  local PKGS=($(pkgconfigDepends))
+
+  if [ "${#PKGS[@]}" -gt 0 ]; then
+    SYSTEMDEPS="$SYSTEMDEPS pkgconfig"
   fi
 
   local TOOLS=($(allBuildTools))
