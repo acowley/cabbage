@@ -190,20 +190,6 @@ cabalLibraryTarget() {
   fi
 }
 
-# Print out a .cabal file starting with a pkgconfig-depends line.
-pkgconfigDependsStarts() {
-  if cabalFileExists ; then
-    cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
-  fi
-}
-
-# Pull all pkgconfig dependencies from a .cabal file
-pkgconfigDepends() {
-  pkgconfigDependsStarts | stanzaHead \
- | sed -e 's/[Pp]kg[Cc]onfig-[Dd]epends:[[:space:]]*//' -e 's/,/\
- /g' | sed 's/^[[:space:]]*//' | sed '/^$/d'
-}
-
 # Take all lines until the next Cabal file stanza begins. The
 # assumption is that the first line is the beginning of a stanza, so
 # its indentation level determines where the next stanza begins.
@@ -232,9 +218,28 @@ EOF
 }
 #+END_SRC
 
-** pkgconfig test
+** pkgconfig-depends
+#+NAME: pkgconfig
+#+BEGIN_SRC sh :tangle cabbage :exports code
+# Print out a .cabal file starting with a pkgconfig-depends line.
+pkgconfigDependsStarts() {
+  if cabalFileExists ; then
+    cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
+  fi
+}
+
+# Pull all pkgconfig dependencies from a .cabal file
+pkgconfigDepends() {
+  pkgconfigDependsStarts | stanzaHead \
+ | sed -e 's/[Pp]kg[Cc]onfig-[Dd]epends:[[:space:]]*//' -e 's/,/\
+ /g' | sed 's/^[[:space:]]*//' | sed '/^$/d'
+}
+#+END_SRC
+
+*** pkgconfig test
 #+BEGIN_SRC sh :results output :noweb yes
 <<cabalHelpers>>
+<<pkgconfig>>
 cd ../ffmpeg-light
 pkgconfigDepends
 PKGS=($(pkgconfigDepends))
