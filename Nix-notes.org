@@ -3,21 +3,21 @@ The idea is that every build takes place in a cabal sandbox.
 
 We ultimately want to create a derivation that has been parameterized
 by a set of constraints. We obtain the right constraints by running
-=cabal freeze= on the downstream package we are trying to build, then
-intersecting the result of =cabal freeze= run against each upstream
-package with that original constraints file. The smaller constraints
-file becomes part of the nix derivation of the upstream package,
-meaning we can have multiple instances of the same version of a
-package that have been built with different dependencies.
+=cabal install --dependencies-only --dry-run= on the downstream
+package we are trying to build, then using that build plan to
+constraint the solver when building each upstream package. The
+=buildplan= file becomes part of the nix derivation of the upstream
+package, meaning we can have multiple instances of the same version of
+a package that have been built with different dependencies.
 
 Those very specific derivations go into the Nix store so that they
 might be re-used when the same specific instance of a package version
 is again required.
 
 ** Installation
-The ~cabbage~ script is tangled from this file. Make it executable and
-put it on your ~PATH~, or invoke it however you prefer. It is a
-regular bash script that calls out to ~sed~, ~awk~, ~grep~, etc.
+The ~cabbage~ script is tangled from this file. Put it on your ~PATH~,
+or invoke it however you prefer. It is a regular bash script that
+calls out to ~sed~, ~awk~, ~grep~, etc.
 
 ** Development Workflow
 Run ~cabbage~ in your project's root directory (containing the
@@ -30,15 +30,6 @@ nix-shell --command 'sh $setup'
 to make sure all dependencies are built and linked into your
 sandbox. At this point, you can ~cabal configure~ etc., outside of
 ~nix-shell~ and work as usual.
-
-If the above ~nix-shell~ command gives you an error (e.g. with Nix
-1.8), you can try running ~nix-shell~ without any arguments, then,
-once in the shell, run, 
-
-#+BEGIN_SRC sh
-sh "$setup"
-#+END_SRC
-
 
 To build the current package with Nix, use ~cabbage -b~ instead of
 ~nix-build shell.nix~. The former is a short wrapper around the
@@ -264,14 +255,14 @@ cabalBuildTools() {
   if cabalFileExists ; then
     cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
     | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
-/' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
+/g' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
   fi
 }
 
 allBuildToolsAux() {
   cabalBuildTools
   if [ -d .cabbages ]; then
-    local DEPS=($(getDependencies cabal.config))
+    local DEPS=($(buildplanDependencies))
     local d
     (cd .cabbages && \
      for d in "${DEPS[@]}"; do
@@ -301,18 +292,17 @@ allBuildTools() {
 #+BEGIN_SRC sh :noweb yes :results output
 <<cabalHelpers>>
 <<findIndex>>
-<<isolateConstraints>>
-<<getDependencyNames>>
 <<allExtraLibraries>>
 <<allBuildTools>>
 #cd ~/temp/rifactor
 cd ~/temp/OpenCL-1.0.3.4
+#cd ../Frames
 #cd ../Hocl-OpenCL
 allBuildTools
 #+END_SRC
 
 #+RESULTS:
-: c2hs
+: 
 
 ** Frameworks
 We can pick out frameworks requirements that are needed on OS X (darwin).
@@ -333,57 +323,191 @@ all dependencies not available in the global database.
 
 #+NAME: dryDependencies
 #+BEGIN_SRC sh : exports code :tangle cabbage
+
+# Prints out lines of the form "pkgName X.Y.Z" (where X, Y, and Z are
+# numbers). One line for each package that will have to be installed
+# in a sandbox given the current version of GHC and the contents of
+# its global package database.
 dryDependencies() {
-  sed -n '3,$ p' | sed 's/ .*$//' | sed 's/\([-_[:alpha:]]*\)-\([[:digit:].]*\)$/\1 \2/'
+  local EXTRAS=""
+  if [ "$#" -gt 0 ]; then
+    if [ $1 -eq 2 ]; then
+      EXTRAS="--enable-tests --enable-benchmarks"
+    fi
+  fi
+  if [ -f cabbage.config ]; then
+    local MYNAME=$(cat ./*.cabal | grep -i "name:" | awk 'BEGIN { FS=":"; } {print($2);}' | sed 's/^[[:space:]]*//')
+    local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
+    if ! [ "$FLAGS" = "" ]; then
+      EXTRAS="$EXTRAS --flags=\"$FLAGS\""
+    fi
+  fi
+  local CMD="cabal install --dependencies-only --dry-run"
+  if ! [ "$EXTRAS" = "" ]; then
+    CMD="$CMD $EXTRAS"
+  fi
+  eval $CMD \
+| sed -n '3,$ p'  | sed '/Warning: /,$ d' \
+| sed -e 's/ .*$//' -e 's/\([-_[:alnum:]]*\)-\([[:digit:].]*\)$/\1 \2/' \
+| sed '/^[-_[:alnum:]]* [[:digit:]]/ !d'
+}
+
+# Reads the buildplan file in the current directory and prints one
+# package per line in the form "pkgname-X.Y.Z".
+buildplanDependencies() {
+  if [ -f buildplan ]; then
+    cat buildplan | sed 's/\([^ ]*\) \(.*\)$/\1-\2/'
+  else
+    echo "No buildplan found in $(pwd)"
+    exit 1
+  fi
+}
+
+# Generate cabal.config contents from a buildplan. This removes
+# cabbage-patched version numbers so that "cabal install" can work
+# properly.
+buildplanConstraints() {
+  echo "constraints:"; (cat buildplan | sed 's/^\([^ ]*\) \(.*\)$/  \1 ==\2,/' | sed 's/\.4552,$/,/' | sed '$ s/,//')
 }
 #+END_SRC
 
 *** Test
 #+BEGIN_SRC sh :noweb yes :results output
 <<dryDependencies>>
-cd ../GLUtil
-cabal install --dependencies-only --dry-run | dryDependencies
+<<flagsFor>>
+#cd ../GLUtil
+#cd CabbageDown2
+cd ../Frames
+dryDependencies
 #+END_SRC
 
 #+RESULTS:
 #+begin_example
-ObjectName 1.1.0.0
-OpenGLRaw 2.4.1.0
-GLURaw 1.5.0.0
+Boolean 0.2.3
+NumInstances 1.4
+OneTuple 0.2.1
+abstract-par 0.3.3
+ansi-terminal 0.6.2.1
+ansi-wl-pprint 0.6.7.2
+base-prelude 0.1.16
+base64-bytestring 1.0.0.1
 cereal 0.4.1.1
-mtl 2.1.3.1
+clock 0.4.1.3
+colour 2.3.3
+data-default-class 0.0.1
+data-default-instances-base 0.0.1
+data-default-instances-containers 0.0.1
+data-default-instances-old-locale 0.0.1
+digest 0.0.1.2
+dlist 0.7.1.1
+data-default-instances-dlist 0.0.1
+data-default 0.5.3
+erf 2.0.0.0
+fingertree 0.1.0.1
+groups 0.4.0.0
+network 2.6.0.2
+newtype 0.2
 parallel 3.2.0.6
 prelude-extras 0.4
 primitive 0.5.4.0
+random 1.1
+abstract-deque 0.3
 reflection 1.5.1.2
+split 0.2.2
 stm 2.4.4
-StateVar 1.1.0.0
+syb 0.4.4
 tagged 0.7.3
 text 1.2.0.4
-OpenGL 2.12.0.0
+blaze-builder 0.3.3.4
+blaze-markup 0.6.3.0
+cookie 0.4.1.4
 hashable 1.2.3.2
+case-insensitive 1.2.0.4
+http-types 0.8.6
+mime-types 0.1.0.6
 nats 1
+readable 0.3.1
+scientific 0.3.3.8
+attoparsec 0.12.1.3
+transformers 0.4.3.0
+StateVar 1.1.0.0
+lens-family-core 1.2.0
+mmorph 1.0.4
+mtl 2.2.1
+blaze-svg 0.3.4.1
+monad-par-extras 0.3.3
+operational 0.2.3.2
+parsec 3.1.9
+network-uri 2.6.0.1
+pipes 4.1.4
+statestack 0.2.0.3
 transformers-compat 0.4.0.4
 distributive 0.4.4
 exceptions 0.8.0.2
+intervals 0.7.1
+optparse-applicative 0.11.0.2
+transformers-base 0.4.4
+monad-control 1.0.0.4
+list-t 0.4.3
+tuple 0.3.0.2
 unordered-containers 0.2.5.1
 semigroups 0.16.2.2
+utf8-string 1
+publicsuffixlist 0.1
 vector 0.10.12.2
+FontyFruity 0.5
+aeson 0.8.0.2
+foldl 1.0.8
+mwc-random 0.13.3.0
+monad-par 0.3.4.7
+vector-algorithms 0.6.0.3
+vector-binary-instances 0.2.1.0
+vector-th-unbox 0.2.1.2
+math-functions 0.1.5.2
+statistics 0.13.2.3
+vinyl 0.5.1
 void 0.7
-bytes 0.15
+MemoTrie 0.6.2
 contravariant 1.3.1
 comonad 4.2.5
 semigroupoids 4.3
 bifunctors 4.2.1
+monoid-extras 0.3.3.5
+dual-tree 0.2.0.5
 profunctors 4.4.1
 free 4.11
-adjunctions 4.2
-kan-extensions 4.2.1
-lens 4.8
-linear 1.18.0.1
+lens 4.7
+Chart 1.3.3
+vector-space 0.9
+active 0.1.0.18
+vector-space-points 0.2.1
+diagrams-core 1.2.0.5
+xml 1.3.14
 zlib 0.5.4.2
 JuicyPixels 3.2.3
+Rasterific 0.5.1
+diagrams-lib 1.2.0.8
+SVGFonts 1.4.0.3
+diagrams-postscript 1.1.0.4
+diagrams-rasterific 0.1.0.7
+diagrams-svg 1.1.0.4
+Chart-diagrams 1.3.3
+streaming-commons 0.1.10.0
+http-client 0.4.9
+zip-archive 0.2.3.7
 #+end_example
+
+
+#+BEGIN_SRC sh :noweb yes :results output
+<<dryDependencies>>
+cd CabbageDown2
+dryDependencies > buildplan
+DEPS=($(buildplanDependencies))
+echo "We have ${#DEPS[@]} dependencies: ${DEPS[@]}"
+#+END_SRC
+
+#+RESULTS:
+: We have 3 dependencies: colour-2.3.3 unix-2.7.1.0 directory-1.2.1.0
 
 ** Unconstrained
 As a last-ditch effort to freeze a build plan, we can remove all
@@ -464,8 +588,9 @@ freezeUnconstrained() {
 #+END_SRC
 
 * Finding dependencies
-So we've got a package and we've created a sandbox. We can run =cabal
-freeze= to get a =cabal.config= file that lists all dependencies.
+So we've got a package and we've created a sandbox. We can run
+=dryDependencies= to get a =buildplan= file that lists all
+dependencies.
 
 ** add-sourced dependencies
 
@@ -501,9 +626,9 @@ echo "$LISTED" | getAddedSources
 : /Users/acowley/Documents/Projects/Nix/TestCabbage
 
 ** Dependencies on hackage
-This is just =cabal get=. We then need to =cabal configure= and =cabal
-freeze= so that we can do the =cabal.config= intersection with the
-downstream constraints file.
+This is just =cabal get=. We then need to =cabal configure= and
+=dryDependencies= so that we can do the =buildplan= intersection
+with the downstream constraints file.
 
 However, we will also add-source everything that is add-sourced to the
 downstream package before configuring.
@@ -536,304 +661,6 @@ complicated ~.cabal~ file format. We must preserve any logic expressed
 therein so that freezing the newly constrained ~.cabal~ file may rely
 on that logic.
 
-** Independent freezing
-The ~cabal freeze~ command is rather underfeatured: it does not
-support supplying extra constraints or flags for dependencies. This
-can prevent it from finding build plans when we artificially constraint the
-~.cabal~ file with constraints from a downstream package. Another
-approach is to ~cabal freeze~ the upstream package on its own, then
-intersect that ~cabal.config~ file with the one from downstream.
-
-*** AWK constraint intersection
-#+NAME: awkConstraintIntersection
-#+BEGIN_SRC sh :exports code
-
-# Takes two sets of constraints separates by a line containing only
-# "***" and returns the second set of package names with versions
-# drawn from the first set.
-awkConstraintIntersection() {
-  read -r -d '' intersect<<'EOF'
-BEGIN {
-  downConfig = 1;
-  numUpstream = 0;
-}
-{
-  if($1 == "***") {
-    downConfig = 0;
-  } else if(downConfig) {
-    downstream[$1] = $2;
-  } else {
-    if($1 in downstream) {
-      numUpstream++;
-      upstream[$1] = downstream[$1];
-    }
-  }
-}
-END {
-  cnt = 0;
-  for (p in upstream) {
-    if(cnt==0) {
-      printf("constraints: ");
-    } else {
-      printf("             ");
-    }
-    printf("%s ==%s", p, upstream[p]);
-    cnt++;
-    if(cnt != numUpstream) { printf(",\n"); }
-  }
-}
-EOF
-  awk "$intersect"
-}
-#+END_SRC
-
-**** Intersection tests
-Quick test
-
-#+BEGIN_SRC sh :results output :noweb yes
-<<awkConstraintIntersection>>
-read -r -d '' config1<<'EOF'
-foo 0.1.2
-bar 2.1.3
-baz 4.1
-EOF
-
-read -r -d '' config2<<'EOF'
-foo 0.1
-baz 5.2
-EOF
-
-BOTH=$(printf "%s\n***\n%s" "$config1" "$config2")
-RES=$(awkConstraintIntersection <<< "$BOTH")
-echo "$RES"
-
-#+END_SRC
-
-#+RESULTS:
-: constraints: baz ==4.1,
-:              foo ==0.1.2
-
-*** Update Constraints AWK
-#+NAME: updateConstraintsAwk
-#+BEGIN_SRC sh :noweb yes :tangle cabbage
-<<awkConstraintIntersection>>
-<<isolateConstraints>>
- 
-# Takes two constraint files, downstream and upstream
-updateConstraintsAwk() {
-  { (isolateAndCleanupConstraints < "$1"); \
-    echo "***"; \
-    (isolateAndCleanupConstraints < "$2"); } \
-  | awkConstraintIntersection
-}
-#+END_SRC
-
-**** Test of the whole thing
-#+BEGIN_SRC sh :results output :noweb yes
-<<updateConstraintsAwk>>
-updateConstraintsAwk experiments/a-cabal.config experiments/b-cabal.config
-#+END_SRC
-
-#+RESULTS:
-: constraints: base ==4.8,
-:              rts ==1.0,
-:              ghc-prim ==0.3.1.0,
-:              integer-gmp ==0.5.1.0
-
-**** Big test with GLUtil
-#+BEGIN_SRC sh :noweb yes :results output :exports none
-<<updateConstraintsAwk>>
-
-read -r -d '' configGLUtil<<'EOF'
-constraints: GLURaw ==1.4.0.1,
-             JuicyPixels ==3.1.6.1,
-             OpenGL ==2.10.0.0,
-             OpenGLRaw ==1.5.0.0,
-             array ==0.5.0.0,
-             base ==4.7.0.1,
-             bytestring ==0.10.4.0,
-             containers ==0.5.5.1,
-             ghc-prim ==0.3.1.0,
-             hashable ==1.2.2.0,
-             integer-gmp ==0.5.1.0,
-             text ==1.1.1.3,
-             time ==1.4.2,
-             transformers ==0.3.0.0,
-             transformers-compat ==0.3.3.4,
-             unix ==2.7.0.1,
-             unordered-containers ==0.2.5.0,
-             vector ==0.10.11.0,
-             void ==0.6.1,
-             zlib ==0.5.4.1
-documentation: True
-EOF
-
-read -r -d '' configHashable<<'EOF'
-constraints: array ==0.5.0.0,
-             base ==4.7.0.2,
-             bytestring ==0.10.4.0,
-             deepseq ==1.3.0.2,
-             ghc-prim ==0.3.1.0,
-             integer-gmp ==0.5.1.0,
-             rts ==1.0,
-             text ==1.2.0.4
-EOF
-
-TMP1=$(mktemp -t 'cabbage')
-TMP2=$(mktemp -t 'cabbage')
-echo "$configGLUtil" > $TMP1
-echo "$configHashable" > $TMP2
-updateConstraintsAwk "$TMP1" "$TMP2"
-rm $TMP1
-rm $TMP2
-#+END_SRC
-
-#+RESULTS:
-: constraints: base ==4.7.0.1,
-:              text ==1.1.1.3,
-:              deepseq ==1.3.0.2,
-:              rts ==1.0,
-:              bytestring ==0.10.4.0,
-:              ghc-prim ==0.3.1.0,
-:              array ==0.5.0.0,
-:              integer-gmp ==0.5.1.0
-
-** Updating build-depends constraints in-place
-
-This approach processes an entire ~.cabal~ file, leaving everything
-intact except for dependency constraints that are overridden by the
-~cabal.config~ generated for the downstream package.
-
-#+NAME: pinBuildDepends
-#+BEGIN_SRC sh :exports code :tangle cabbage
-pinBuildDepends() {
-  local PIN
-  read -r -d '' PIN<<'EOF'
-BEGIN { 
-  downConfig = 1;
-  buildDep = 0;
-}
-/[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:/ {
-  match($0, /^[[:space:]]*/);
-  indentation = RLENGTH;
-  for(i = 0; i < RLENGTH; ++i) printf(" ");
-  printf("build-depends:");
-
-  buildDep = 2;
-  gsub(/^[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:/,"",$0);
-}
-{
-  if(downConfig && $1 == "***") {
-    downConfig = 0;
-    FS=",";
-  } else if(downConfig) {
-    downstream[$1] = $2;
-  } else if(buildDep) {
-    match($0, /^[[:space:]]*/);
-    if(buildDep == 2 || RLENGTH > indentation) {
-      buildDep = 1;
-      # Update a line of a build-depend
-      for(i = 1; i <= NF; ++i) {
-        if(i == NF && match($(i), "^[[:space:]]*$")) {
-        } else {
-          if(i == 1) {
-            # Add leading spaces
-            match($(i), "^[[:space:]]*");
-            for(j = 0; j < RLENGTH; ++j) {
-              printf(" ");
-            }
-          }
-          gsub(/^[[:space:]]*/,"",$(i));
-          gsub(/[[:space:]]*$/,"",$(i));
-          if(match($(i), "[ ><=]")) {
-            pkgName = substr($(i), 1, RSTART - 1);
-            if(pkgName in downstream) {
-              printf("%s ==%s", pkgName, downstream[pkgName]);
-            } else {
-              printf("%s", $(i));
-            }
-          } else {
-            if($(i) in downstream) {
-              printf("%s ==%s", $(i), downstream[$(i)]);
-            } else {
-              printf("%s", $(i));
-            }
-          }
-        }
-        if(i < NF) printf(", ");
-      }
-      printf("\n");
-    } else {
-      # We've left a build-depends stanza
-      buildDep = 0;
-      print $0
-    }
-  } else {
-    # Everything else gets printed
-    print $0
-  }
-}
-EOF
-  awk "$PIN"
-}
-#+END_SRC
-
-#+BEGIN_SRC sh :noweb yes :results output
-<<pinBuildDepends>>
-<<isolateConstraints>>
-
-{ (isolateAndCleanupConstraints < ../Frames/cabal.config); \
-  echo "***"; \
-  cat ../Frames/.cabbages/hashable-1.2.3.1/hashable.cabal; } \
-| pinBuildDepends
-
-#+END_SRC
-
-** Build-depends reformatting
-We sometimes extract one or more ~build-depends~ stanzas from a
-~.cabal~ file. These are comma separated, can contain line comments,
-and are spaced somewhat unpredictably. This helper reformats them to
-"package, constraint" format
-
-#+NAME: buildDependsReformat
-#+BEGIN_SRC sh :exports code :tangle cabbage
-
-# Given a build-depends stanza, remove the "build-depends:" string,
-# commas between dependencies, and line comments. Then, remove leading
-# spaces and reformat each dependency as "package, versions".
-buildDependsReformat() {
-  sed -e 's/^[[:space:]]*[Bb][Uu][Ii][Ll][Dd]-[Dd][Ee][Pp][Ee][Nn][Dd][Ss]:[[:space:]]*//' -e 's/,/\
-  /g' -e 's/--.*$//' | sed -e 's/^[[:space:]]*//' -e 's/ /, /' \
-  -e 's/\([[:alpha:]]\)\([<>=]\)/\1, \2/'
-}
-#+END_SRC
-
-** Build-depends updating
-We simplify the job of ~cabal freeze~ by giving it a ~.cabal~ file
-that is already loaded with the constraints of the downstream
-package's ~cabal.config~ file.
-
-** Working with ~cabal.config~ files
-We first use sed to isolate the constraint lines.
-#+NAME: isolateConstraints
-#+BEGIN_SRC sh :exports code :tangle cabbage
-
-# Takes a configuration file and extracts the "constraints" section.
-isolateConstraints() {
-  sed -n '/^[Cc]onstraints/,/^[^[:space:]]/ { /^[Cc]onstraints/p; /^[[:space:]]/p; }'
-}
-
-isolateAndCleanupConstraints() {
-  isolateConstraints | sed -e 's/^[Cc]onstraints:[[:space:]]*//' -e 's/^[[:space:]]*//' \
-  | sed 's/\([-_[:alpha:]]*\) ==\([[:digit:].]*\),*$/\1 \2/' | sed '/^$/d'
-}
-#+END_SRC
-
-#+BEGIN_SRC sh :noweb yes :results output
-<<isolateConstraints>>
-cat "../GLUtil/cabal.config" | isolateAndCleanupConstraints
-#+END_SRC
-
 ** A dummy Cabal Library
 
 #+NAME: dummyCabalLibrary
@@ -851,66 +678,6 @@ dummyCabalLibrary() {
   echo "  exposed-modules:"
 }
 #+END_SRC
-
-** Freezing with downstream constraints
-Now we can put the constraint intersection pieces together. We take a
-~cabal.config~ produced by ~cabal freeze~ run against a downstream
-package and a ~.cabal~ file for an upstream package mentioned in that
-~cabal.config~ file. We produce a temporary upstream package ~.cabal~
-file with all versions pinned by the downstream ~cabal.config~, and
-pass that to ~cabal freeze~ to obtain the upstream package's
-transitive dependencies.
-
-#+NAME: freezeWithConstraints
-#+BEGIN_SRC sh :exports code :tangle cabbage
-
-# Takes a constraints file and works with the .cabal file in the
-# current directory.
-freezeWithConstraints() {
-  local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
-  if [ "$NUMCABALS" -gt 1 ]; then
-    echo "Error: Found multiple cabal files in $(pwd)"
-    exit 1
-  fi
-  local REALCABAL=$(basename "$(ls ./*.cabal)")
-  ({ (isolateAndCleanupConstraints < "$1"); echo "***"; cat "$REALCABAL"; } \
-   | pinBuildDepends) > cabbageDummy.cabal
-
-  # Remove cabbage-patch version suffixes so cabal freeze can work
-  sed 's/\( ==[[:digit:].]*\).4552/\1/' cabbageDummy.cabal > cabbageDummy2.cabal
-  rm cabbageDummy.cabal
-  mv "$REALCABAL" cabbageBackup.bak
-  freezeCabbagePatch
-  local OK=$?
-  mv cabbageBackup.bak "$REALCABAL"
-  rm cabbageDummy2.cabal
-  return $OK
-}
-#+END_SRC
-
-*** Example data
-
-#+BEGIN_SRC sh :exports none :results output :noweb yes
-<<isolateConstraints>>
-read -r -d '' CONFIG<<'EOF'
-constraints: GLURaw ==1.4.0.1,
-             JuicyPixels ==3.1.6.1,
-             OpenGL ==2.10.0.0,
-             OpenGLRaw ==1.5.0.0,
-             zlib ==0.5.4.1
-documentation: True
-EOF
-
-CLEAN=$(isolateAndCleanupConstraints <<< "$CONFIG")
-echo "$CLEAN"
-#+END_SRC
-
-#+RESULTS:
-: GLURaw 1.4.0.1
-: JuicyPixels 3.1.6.1
-: OpenGL 2.10.0.0
-: OpenGLRaw 1.5.0.0
-: zlib 0.5.4.1
 
 * Time stamps
 Add-sourced dependencies are tracked with a time stamp that cabal uses
@@ -1026,7 +793,7 @@ cabalExtraLibraries() {
 # visits each of them in the .cabbages directory and prints out all
 # extra-libraries.
 allExtraLibrariesAux() {
-  local DEPS=($(getDependencies cabal.config))
+  local DEPS=($(buildplanDependencies))
   local d
   cabalExtraLibraries
   (cd .cabbages && \
@@ -1062,8 +829,6 @@ warnExtraLibraries() {
 *** Test
 #+BEGIN_SRC sh :noweb yes :results output
 <<cabalHelpers>>
-<<isolateConstraints>>
-<<getDependencyNames>>
 <<allExtraLibraries>>
 cd ~/temp/rifactor
 allExtraLibraries
@@ -1135,37 +900,6 @@ BEGIN { inDeps = 0; }
 EOF
   awk "$FINDDEPS"
 }
-
-# Takes a flag setting and replaces occurences of that flag in a
-# .cabal file with the boolean value indicated by the argument. An
-# argument of "foo" or "+foo" sets flag "foo" to "True", while "-foo"
-# sets it to "False".
-fixFlagValue() {
-  local PAT
-  local VAL
-  if [ "${1:0:1}" = "+" ]; then
-    PAT="flag(${1:1})"
-    VAL="True"
-  elif [ "${1:0:1}" = "-" ]; then
-    PAT="flag(${1:1})"
-    VAL="False"
-  else
-    PAT="flag($1)"
-    VAL="True"
-  fi
-  sed "s/$PAT/$VAL/g"
-}
-
-# Takes a space-separated list of flag values, and fixes their
-# assignments in the .cabal file in the current directory.
-fixAllFlags() {
-  local CABAL=$(basename "$(ls ./*.cabal)")
-  local -a ARR=($1)
-  for f in "${ARR[@]}"; do
-    (cat "$CABAL" | fixFlagValue "$f") > "$CABAL.tmp"
-    mv "$CABAL.tmp" "$CABAL"
-  done
-}
 #+END_SRC
 
 *** Test
@@ -1179,13 +913,6 @@ cat cabbage.config | flagsFor $(unversionPackageName "transformers-compat-0.4.0.
 
 #+RESULTS:
 : three
-
-Fix multiple flags in "transformers-compat".
-#+BEGIN_SRC sh :noweb yes :exports none :results output
-<<flagsFor>>
-cd ~/temp/diagrams-lib-1.2.0.8/.cabbages/transformers-compat-0.4.0.4
-fixAllFlags "three -mtl"
-#+END_SRC
 
 ** Distribute flags to the targeted cabbages
 Read in a ~cabbage.config~ file, and copy the relevant parts of the
@@ -1248,55 +975,6 @@ create a sandbox, then manually symlink dependency artefacts into the
 sandbox and let =cabal-install= invoke GHC with all the necessary path
 information.
 
-** Getting package dependency names
-List the exact package names we need as dependencies.
-
-#+NAME: getDependencyNames
-#+BEGIN_SRC sh :tangle cabbage :exports code
-# Takes a constraint line, returns a package name with version
-getDependency() {
-   sed 's/\([-_[:alpha:]]*\) \([[:digit:].]*[,]*\)/\1-\2/'
-}
-
-# Remove packages that come with GHC
-filterOutWiredIn() {
-  grep -Ev "^(base-[[:digit:]]|bin-package-db-[[:digit:]]|rts-[[:digit:]]|ghc-[[:digit:]]|ghc-prim-[[:digit:]]\
-|integer-gmp-[[:digit:]])"
-}
-
-# Takes a cabal.config file and outputs a list of package names
-getDependencies() {
-  (isolateAndCleanupConstraints < "$1") | getDependency | filterOutWiredIn
-  if [ -f cabbage.config ]; then
-    (isolateAndCleanupConstraints < cabbage.config) | getDependency | filterOutWiredIn
-  fi
-}
-#+END_SRC
-
-#+BEGIN_SRC sh :results output :noweb yes
-<<isolateConstraints>>
-<<getDependencyNames>>
-cd TempCabbage
-DEPS=($(getDependencies cabal.config))
-echo "We have ${#DEPS[@]} dependencies: ${DEPS[@]}"
-#cat cabal.confg | isolateConstraints
-#+END_SRC
-
-#+RESULTS:
-: We have 0 dependencies: 
-
-*** Quick tests
-
-#+BEGIN_SRC sh :noweb yes :results output :exports none
-<<isolateConstraints>>
-<<getDependencyNames>>
-getDependencies experiments/a-cabal.config
-#+END_SRC
-
-#+RESULTS:
-: TestCabbage-0.1.0.0
-
-
 ** Getting package dependency sources
 We can =cabal get= things from hackage, but if a dependency has been
 add-sourced, we should =cabal sdist= it.
@@ -1312,11 +990,11 @@ cabal get $1 -d .cabbages
 #+NAME: getAddSource
 #+BEGIN_SRC sh :tangle cabbage :exports code
 
-# Get the package in this directory's full versioned name
+# Get the package in this directory's full versioned name. E.g. name-x.y.z
 getMyFullName() {
   local CABAL=$(ls ./*.cabal)
-  { (cat "$CABAL" | tr -d '\r' | grep "^[Nn]ame:" | sed 's/^[Nn]ame:[[:space:]]*\(.*\)$/\1/');
-    (cat "$CABAL" | tr -d '\r' | grep "^[Vv]ersion:" | sed 's/^[Vv]ersion:[[:space:]]*\(.*\)$/\1/'); } \
+  { (cat "$CABAL" | tr -d '\r' | grep -i "^name:" | sed 's/^[Nn]ame:[[:space:]]*\(.*\)$/\1/');
+    (cat "$CABAL" | tr -d '\r' | grep -i "^version:" | sed 's/^[Vv]ersion:[[:space:]]*\(.*\)$/\1/'); } \
   | tr '\n' '-' | sed 's/-$//'
 }
 
@@ -1412,7 +1090,7 @@ getDependencySources() {
   for i in "${!ADDEDSOURCEDIRS[@]}"; do
     ADDEDSOURCEPACKAGES[$i]=$(getAddedPackageName "${ADDEDSOURCEDIRS[$i]}")
   done
-  local DEPS=($(getDependencies cabal.config))
+  local DEPS=($(buildplanDependencies))
   mkdir -p .cabbages
   local d
   for d in "${DEPS[@]}"; do
@@ -1434,7 +1112,6 @@ getDependencySources() {
 #+END_SRC
 
 #+BEGIN_SRC sh :noweb yes :exports none :results output
-<<getDependencyNames>>
 <<getAddedSources>>
 <<getAddSource>>
 <<findIndex>>
@@ -1520,7 +1197,7 @@ echo $?
 *** Dependency Nix packages
 
 So we have a directory with a package's source code, and we have a
-=cabal.config= from the downstream package. The downstream package may
+=buildplan= from the downstream package. The downstream package may
 have already had some packages add-sourced to it, so we want to also
 have those add-sources. We could either create an independent sandbox,
 or use the downstream package's sandbox. Interestingly, we're only
@@ -1528,10 +1205,10 @@ doing this to get the benefit of the =cabal sandbox add-source=
 commands, so perhaps using the downstream package's sandbox is the
 right thing to do.
 
-Okay, so for the upstream package, we
+For the upstream package, we
 
 - cabal sandbox init --sandbox=../.cabal.sandbox=
-- cabal freeze
+- cabal install --dependencies-only --dry-run
 - Get dependencies by intersecting upstream's cabal.config with
   downstream's
 
@@ -1619,14 +1296,9 @@ mkCabbage() {
   local FROZENUPSTREAM
   local FROZENDEF
   local LINKSANDBOX
-  local DEPS=($(getDependencies cabal.config))
+  local DEPS=($(buildplanDependencies))
 
-  local DEPNAMES=()
-  local i
-  for ((i=0; i < ${#DEPS[@]}; ++i)); do
-    # Remove version number from dependency name
-    DEPNAMES[$i]=$(sed 's/\(.*\)-[[:digit:]].*/\1/' <<< "${DEPS[$i]}")
-  done
+  local DEPNAMES=($(cat buildplan | sed 's/ .*$//'))
 
   if [ $3 -gt 0 ]; then
     # This is /the/ downstream package or a build-tool
@@ -1753,9 +1425,9 @@ SETUPEOF
     if [ -d "\$src" ]; then
       cp -R "\$src"/* .
       #*/
-      if [ -f \$src/cabal.config.bak ]; then
+      if [ -f \$src/buildplan ]; then
         mkdir \$out/.cabbageCache
-        cp "\$src/cabal.config.bak" "\$out/.cabbageCache/cabal.config.bak"
+        cp "\$src/buildplan" "\$out/.cabbageCache/buildplan"
       fi
     else
       tar xf "\$src" --strip=1
@@ -1794,15 +1466,13 @@ prepCabbage() {
   local d="$1"
   local dbPath="$2"
   local FLAGS
-  if [ -f cabbage.config ]; then
-    local MYNAME=$(unversionPackageName "$d")
-    FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
-    if [ -n "$FLAGS" ]; then
-      echo "Applying flags \"$FLAGS\" to $MYNAME"
-      fixAllFlags "$FLAGS"
-    fi
-  fi
   cabal sandbox init --sandbox=../../.cabal-sandbox > /dev/null
+
+  if [ -f cabal.config ]; then
+    mv cabal.config cabal.config.bak
+  fi
+
+  ln -s ../../bpconstraints cabal.config
 
   if [ -n "$FLAGS" ]; then
     freezeCabbagePatch 0 > /dev/null
@@ -1810,12 +1480,11 @@ prepCabbage() {
     freezeCabbagePatch > /dev/null
   fi
 
-  if ! [ $? -eq 0 ]; then
-    freezeWithConstraints ../../cabal.config
-  else
-    mv cabal.config cabal.config.bak
-    updateConstraintsAwk ../../cabal.config cabal.config.bak > cabal.config
+  rm cabal.config
+  if [ -f cabal.config.bak ]; then
+    mv cabal.config.bak cabal.config
   fi
+
   rm cabal.sandbox.config
   mkCabbage "$dbPath" "$d" 0
 }
@@ -1832,19 +1501,8 @@ mkCabbages() {
     exit 1
   fi
 
-  local CABAL=$(basename "$(ls ./*.cabal)")
-  if [ -f cabbage.config ]; then
-    local MYVNAME=$(getMyFullName)
-    local MYNAME=$(unversionPackageName "$MYVNAME")
-    local FLAGS=$(cat cabbage.config | flagsFor "$MYNAME")
-    if ! [ "$FLAGS" = "" ]; then
-      echo "Applying flags \"$FLAGS\" to the current project"
-      cp "$CABAL" "$CABAL.cabbage.bak"
-      fixAllFlags "$FLAGS"
-    fi
-  fi
   if [ "$1" = true ]; then
-    freezeConsolidatedCabal ./*.cabal
+    freezeCabbagePatch 2
   else
     freezeCabbagePatch 1
     if ! [ $? -eq 0 ]; then
@@ -1864,7 +1522,7 @@ mkCabbages() {
     echo "Froze downstream package at $(pwd)"
   fi
   local dbPath=$(getPackageDBPath)
-  local deps=($(getDependencies cabal.config))
+  local deps=($(buildplanDependencies))
   getDependencySources
   if [ -f cabbage.config ]; then
     cat cabbage.config | sowFlags
@@ -1875,13 +1533,22 @@ mkCabbages() {
   # obviously guarded by an os(windows) or os(solaris) check.
   warnExtraLibraries
 
+  # Build a constraints file the upstream packages can use when
+  # computing their own build plans.
+  buildplanConstraints > bpconstraints
+
   pushd .cabbages > /dev/null
   local d
   for d in "${deps[@]}"; do
     echo "Making cabbage: $d"
-    (cd "$d" && prepCabbage "$d" "$dbPath")
+    if [ -f "$d"/default.nix ]; then
+      echo "Using existing default.nix"
+    else
+      (cd "$d" && prepCabbage "$d" "$dbPath")
+    fi
   done
   popd > /dev/null
+  rm bpconstraints
 
   local BUILDTOOLS=($(allBuildTools))
 
@@ -1891,9 +1558,13 @@ mkCabbages() {
     local bt
     for bt in "${BUILDTOOLS[@]}"; do
       cabal get "$bt"
-      local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
-      echo "Making build-tool cabbage: $d"
-      (cd "$d" && cabal sandbox init && mkCabbages false false)
+      if ! [ $? -eq 0 ]; then
+        echo "Build tool $bt is not available from Hackage"
+      else
+        local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
+        echo "Making build-tool cabbage: $d"
+        (cd "$d" && cabal sandbox init && mkCabbages false false)
+      fi
     done
     popd > /dev/null
   fi
@@ -1908,18 +1579,12 @@ mkCabbages() {
 
 #+BEGIN_SRC sh :exports none :results output :noweb yes
 <<getPackageDBPath>>
-<<getDependencyNames>>
 <<mkCabbage>>
 <<getAddedSources>>
 <<getAddSource>>
 <<findIndex>>
 <<getDependencySources>>
 <<dummyCabalLibrary>>
-<<isolateConstraints>>
-<<buildDependsReformat>>
-<<pinBuildDepends>>
-<<freezeWithConstraints>>
-<<updateConstraintsAwk>>
 <<cabbagePatch>>
 
 (cd CabbageDown && mkCabbages)
@@ -1935,44 +1600,6 @@ mkCabbages() {
 : Resolving dependencies...
 : Making cabbage: colour-2.3.3
 : Preparing /Users/acowley/Documents/Projects/Cabbage/CabbageDown/.cabbages/colour-2.3.3
-
-* Multiple Targets
-
-We sometimes want ~cabal freeze~ to consider the dependencies of all
-targets, including test and benchmark suites. We accomplish this by
-producing an alternate ~.cabal~ file where benchmark and test suites
-have been changed to executable build targets, then running ~cabal
-freeze~ against that.
-
-#+NAME: testBenchExecutable
-#+BEGIN_SRC sh :exports code
-testBenchExecutable() {
-  sed -e 's/^[Tt]est-[Ss]uite[[:space:]]*\(.*\)$/executable test-suite-\1/' \
-      -e 's/^[Bb]enchmark[[:space:]]*\(.*\)$/executable benchmark-\1/' \
-      -e 's/^[[:space:]]*[Tt]ype:.*$//'
-}
-#+END_SRC
-
-** Consolidated Cabal
-
-#+NAME: freezeConsolidatedCabal
-#+BEGIN_SRC sh :tangle cabbage :noweb yes :exports code
-<<testBenchExecutable>>
-
-freezeConsolidatedCabal() {
-  local NUMCABALS=$(find . -maxdepth 1 -name '?*.cabal' | wc -l)
-  if [ "$NUMCABALS" -gt 1 ]; then
-    echo "Error: Found multiple cabal files!"
-    exit 1
-  fi
-  local REALCABAL=$(basename "$(ls ./*.cabal)")
-  (cat "$REALCABAL" | testBenchExecutable) > cabbageDummy.cabal
-  mv "$REALCABAL" cabbageBackup.bak
-  freezeCabbagePatch 1
-  mv cabbageBackup.bak "$REALCABAL"
-  rm cabbageDummy.cabal
-}
-#+END_SRC
 
 * Shadowing the global package database
 A problem occurs when we want to rebuild a globally installed package
@@ -2021,11 +1648,6 @@ upgradesGlobal() {
   read -r -d '' AWK<<'EOF'
 BEGIN {
   firstLine = 1;
-  inConstraints = 0;
-}
-/^[Cc]onstraints:/ {
-  inConstraints = 1;
-  gsub(/^[Cc]onstraints:/,"",$0);
 }
 {
   if(firstLine) {
@@ -2037,103 +1659,25 @@ BEGIN {
       globallyInstalled[pkg] = ver;
     }
     firstLine = 0;
-  } else if(inConstraints) {
-    if(match($0, /^[[:space:]]/)) {
-      inConstraints = 2;
-      match($0, /^[[:space:]]*/);
-      sub(/^[[:space:]]*/,"",$0);
-      match($0, " ==");
-      pkgName = substr($0, 1, RSTART - 1);
-      versionStart = RSTART + 3;
-      sub(/,/,"",$0);
-      pkgVersion = substr($0, versionStart);
-      versioned = sprintf("%s-%s",pkgName,pkgVersion);
-      if(pkgName in globallyInstalled) {
-        if(globallyInstalled[pkgName] != pkgVersion) {
-          print(versioned, "is an upgrade from the global package database");
-          exit 1;
-        }
-      }
-    } else {
-      inConstraints = 0;
-    }
-  }
-}
-EOF
-  awk "$AWK"
-}
-
-# Takes a first line that is "ghc-pkg list --global --simple-output"
-# and then a piped cabal.config. Globally-installed packages are
-# removed from the dependency list. If any globally-installed package
-# is updated, then they must all be cabbage patched.
-filterOutGlobals() {
-  local AWK
-  read -r -d '' AWK<<'EOF'
-BEGIN {
-  firstLine = 1;
-  inConstraints = 0;
-  firstConstraint = 1;
-}
-/^[Cc]onstraints:/ {
-  inConstraints = 1;
-  printf("constraints:");
-  gsub(/^[Cc]onstraints:/,"",$0);
-}
-{
-  if(firstLine) {
-    split($0,arr," ");
-    for(i in arr) {
-      globallyInstalled[arr[i]] = 1;
-    }
-    firstLine = 0;
-  } else if(inConstraints) {
-    if(match($0, /^[[:space:]]/)) {
-      inConstraints = 2;
-      match($0, /^[[:space:]]*/);
-      spacePrefix = RLENGTH;
-      sub(/^[[:space:]]*/,"",$0);
-      match($0, " ==");
-      pkgName = substr($0, 1, RSTART - 1);
-      versionStart = RSTART + 3;
-      sub(/,/,"",$0);
-      pkgVersion = substr($0, versionStart);
-      versioned = sprintf("%s-%s",pkgName,pkgVersion);
-      if(!(versioned in globallyInstalled)) {
-        if(firstConstraint) {
-          printf(" ");
-          firstConstraint = 0;
-        } else {
-          for(i = 0; i < spacePrefix; ++i) printf(" ");
-        }
-        printf("%s,\n", $0);
-      }
-    } else {
-      inConstraints = 0;
-      print($0);
-    }
   } else {
-    print($0);
+    if($1 in globallyInstalled) {
+      if(globallyInstalled[$1] != $2) {
+        printf("%s-%s is an upgrade from the global package database\n", $1, $2);
+        exit 1;
+      }
+    }
   }
 }
 EOF
   awk "$AWK"
 }
 
-# Tweaks the constraints in a piped ~cabal.config~ file to replace
+# Tweaks the constraints in a piped ~buildplan~ file to replace
 # globally installed packages with cabbage patched versions.
 cabbagePatchConfig() {
   local AWK
   read -r -d '' AWK<<'EOF'
-BEGIN {
-  firstLine = 1;
-  inConstraints = 0;
-}
-/^[Cc]onstraints:/ {
-  inConstraints = 1;
-  printf("constraints:");
-  gsub(/^[Cc]onstraints:/,"",$0);
-}
+BEGIN { firstLine = 1; }
 {
   if(firstLine) {
     split($0,arr," ");
@@ -2141,35 +1685,13 @@ BEGIN {
       globallyInstalled[arr[i]] = 1;
     }
     firstLine = 0;
-  } else if(inConstraints) {
-    if(match($0, /^[[:space:]]/)) {
-      inConstraints = 2;
-      match($0, /^[[:space:]]*/);
-      for(i = 0; i < RLENGTH; ++i) printf(" ");
-      sub(/^[[:space:]]*/,"",$0);
-      match($0, " ==");
-      pkgName = substr($0, 1, RSTART - 1);
-      versionStart = RSTART + 3;
-      hasComma = 0;
-      if(match($0, ",")) {
-        hasComma = 1;
-      }
-      sub(/,/,"",$0);
-      pkgVersion = substr($0, versionStart);
-      versioned = sprintf("%s-%s",pkgName,pkgVersion);
-      if(versioned in globallyInstalled) {
-        printf("%s ==%s.4552", pkgName, pkgVersion);
-      } else {
-        printf("%s", $0);
-      }
-      if(hasComma) printf(",\n");
-      else printf("\n");
+  } else {
+    versioned = sprintf("%s-%s", $1, $2);
+    if(versioned in globallyInstalled) {
+      printf("%s %s.4552\n", $1, $2);
     } else {
-      inConstraints = 0;
       print($0);
     }
-  } else {
-    print($0);
   }
 }
 EOF
@@ -2188,23 +1710,23 @@ getReinstallableGlobals() {
   sed 's/  [ ]*/ /'
 }
 
-# Check /nix/store for a cabal.config.bak for this versioned
-# package. If not found, run cabal freeze, otherwise use the old
+# Check /nix/store for a buildplan for this versioned
+# package. If not found, run dryDependencies, otherwise use the old
 # file. This is just used to get a list of transitive dependencies.
 freezeIfNeeded() {
   local NAME=$(getMyFullName)
   local d
   for d in $(ls -d /nix/store/*-haskell-"$NAME" 2> /dev/null; ls -d /nix/store/*-haskell-"$NAME".4552 2> /dev/null); do
-    if [ -f "$d"/.cabbageCache/cabal.config.bak ]; then
-      cp "$d"/.cabbageCache/cabal.config.bak ./cabal.config.bak
-      chmod u+w cabal.config.bak
+    if [ -f "$d"/.cabbageCache/buildplan ]; then
+      cp "$d"/.cabbageCache/buildplan ./buildplan
+      chmod u+w buildplan
       return 0
     fi
   done
-  cabal freeze && mv cabal.config cabal.config.bak
+  dryDependencies > buildplan
 }
 
-# Freeze a cabal package, then tweak the ~cabal.config~ file to
+# Find a build plan, then tweak the ~buildplan~ file to
 # cabbage patch references to globally installed packages. If an
 # argument is given, we do /not/ search for a cached build plan. This
 # is useful when passing cabbage the "-a" flag, which will produce a
@@ -2212,28 +1734,23 @@ freezeIfNeeded() {
 # of something else.
 freezeCabbagePatch() {
   if [ "$#" -gt 0 ]; then
-    cabal freeze && mv cabal.config cabal.config.bak
+    dryDependencies > buildplan
 
-    if [ $1 -eq 1 ]; then
+    if [ $1 -gt 0 ]; then
       # If a globally-installed package must be upgraded, then we cabbage
       # patch the build plan to allow us to shadow globally-installed
       # packages. Otherwise, we do not mention globally-installed packages
       # in the Nix build plan as GHC will pull them in by default.
       local GLOBALS=$(ghc-pkg list --global --simple-output)
-      (echo "$GLOBALS"; cat cabal.config.bak) | upgradesGlobal
+      (echo "$GLOBALS"; cat buildplan) | upgradesGlobal
       if [ $? -eq 1 ]; then
-        (((echo "$GLOBALS" | getReinstallableGlobals); cat cabal.config.bak) | cabbagePatchConfig) > cabal.config
-        rm cabal.config.bak
-      else
-        ((echo "$GLOBALS"; cat cabal.config.bak) | filterOutGlobals | sed '$ s/,//') > cabal.config
-        # mv cabal.config.bak cabal.config
+        mv buildplan buildplan.bak
+        (((echo "$GLOBALS" | getReinstallableGlobals); cat buildplan.bak) | cabbagePatchConfig) > buildplan
+        rm buildplan.bak
       fi
-    else
-      mv cabal.config.bak cabal.config
     fi
   else
     freezeIfNeeded
-    mv cabal.config.bak cabal.config
   fi
 }
 #+END_SRC
@@ -2262,6 +1779,21 @@ This expression is suitable for ~nix-shell~ or to be installed itself.
 # A default Nix expression suitable for nix-shell or installation.
 defaultShell() {
   local TOOLS=($(allBuildTools))
+
+  local t
+  local TOREMOVE=()
+  for t in "${TOOLS[@]}"; do
+    local dirname=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
+    if [ -n "$dirname" ]; then
+      TOREMOVE+=($t)
+    elif [ "$dirname" = "" ]; then
+      TOREMOVE+=($t)
+    fi
+  done
+  for t in "${TOREMOVE[@]}"; do
+    local i=$(findIndex "$t" TOOLS[@])
+    unset TOOLS[$i]
+  done
 
   local TOOLSDEPS
   if [ "${#TOOLS[@]}" -gt 0 ]; then
@@ -2460,7 +1992,7 @@ fi
 ** TODO Cache cabbages
 Right now, we always download a package and we always generate a
 cabbage. What we could do is cache the downloaded source /and/ the
-result of ~cabal freeze~, then do the cabal.config intersection and
+result of ~cabal freeze~, then do the buildplan intersection and
 check if we've got an equivalent default.nix in the cache. It's not
 clear how much time this would save. We need to do the constraint
 intersection no matter what. We could hash the constraint intersection
