@@ -284,7 +284,7 @@ allBuildToolsAux() {
 # Print the array of all build-tools used to build this package and
 # all its dependencies.
 allBuildTools() {
-  local TOOLS=($(allBuildToolsAux | uniq))
+  local TOOLS=($(allBuildToolsAux | sort -u)) 
 
   # hsc2hs comes with GHC
   local special
@@ -823,8 +823,12 @@ allExtraLibrariesAux() {
 # Print out an array of possibly-needed extra-libraries.
 allExtraLibraries() {
   local LIBS=($(allExtraLibrariesAux | sed 's/,/\
-/' | uniq))
-  echo "${LIBS[@]}"
+/'))
+  if [ "${#LIBS[@]}" -gt 0 ]; then
+    printf '%s\n' "${LIBS[@]}" | sort -u | tr '\n' ' '
+  else
+    echo "${LIBS[@]}"
+  fi
 }
 
 # Let the user know they might need to prepare system dependencies.
