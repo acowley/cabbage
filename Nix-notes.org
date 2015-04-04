@@ -1806,7 +1806,7 @@ defaultShell() {
   local TOREMOVE=()
   for t in "${TOOLS[@]}"; do
     local dirname=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
-    if [ -n "$dirname" ]; then
+    if [ -z "$dirname" ]; then
       TOREMOVE+=($t)
     elif [ "$dirname" = "" ]; then
       TOREMOVE+=($t)
