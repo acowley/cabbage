@@ -1580,12 +1580,16 @@ mkCabbages() {
     for bt in "${BUILDTOOLS[@]}"; do
       cabal get "$bt"
       if ! [ $? -eq 0 ]; then
-        echo "Build tool $bt is not available from Hackage"
-      else
-        local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
-        echo "Making build-tool cabbage: $d"
-        (cd "$d" && cabal sandbox init && mkCabbages false false)
+        local ANS
+        read -p "cabal get did not unpack $bt, should we continue? [Y/n]" -n 1 -t 5 ANS
+        echo
+        if [ "$ANS" = "n" ]; then
+          exit 1
+        fi
       fi
+      local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
+      echo "Making build-tool cabbage: $d"
+      (cd "$d" && cabal sandbox init && mkCabbages false false)
     done
     popd > /dev/null
   fi

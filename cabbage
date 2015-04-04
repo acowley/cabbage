@@ -84,24 +84,34 @@ EOF
 
 # Print out a .cabal file starting with a pkgconfig-depends line.
 pkgconfigDependsStarts() {
-  if cabalFileExists ; then
-    cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
-  fi
+  cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
 }
 
 # Pull all pkgconfig dependencies from a .cabal file
 pkgconfigDepends() {
-  pkgconfigDependsStarts | stanzaHead \
+  if cabalFileExists ; then
+    grep -q -i "[[:space:]]*pkgconfig\-depends:" *.cabal
+    if [ $? -eq 0 ]; then
+      pkgconfigDependsStarts | stanzaHead \
  | sed -e 's/[Pp]kg[Cc]onfig-[Dd]epends:[[:space:]]*//' -e 's/,/\
  /g' | sed 's/^[[:space:]]*//' | sed '/^$/d'
+    else
+      echo
+    fi
+  fi
 }
 
 # Print each build-tool without any version constraint.
 cabalBuildTools() {
   if cabalFileExists ; then
-    cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
+    grep -q -i "[[:space:]]*build-tools:" ./*.cabal
+    if [ $? -eq 0 ]; then
+      cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
     | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
 /g' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
+    else
+     echo
+    fi
   fi
 }
 
@@ -120,7 +130,7 @@ allBuildToolsAux() {
 # Print the array of all build-tools used to build this package and
 # all its dependencies.
 allBuildTools() {
-  local TOOLS=($(allBuildToolsAux | uniq))
+  local TOOLS=($(allBuildToolsAux | sort -u)) 
 
   # hsc2hs comes with GHC
   local special
@@ -134,9 +144,14 @@ allBuildTools() {
 }
 
 cabalFrameworks() {
-  cabalLibraryTarget \
+  if cabalFileExists ; then
+    grep -q -i "[[:space:]]*frameworks:" ./*.cabal
+    if [ $? -eq 0 ]; then
+      cabalLibraryTarget \
   | grep -i "frameworks" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
-/' | uniq
+/' | sort -u
+    fi
+  fi
 }
 
 # Prints out lines of the form "pkgName X.Y.Z" (where X, Y, and Z are
@@ -277,8 +292,11 @@ dummyCabalLibrary() {
 # library target.
 cabalExtraLibraries() {
   if cabalFileExists ; then
-    cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
-    grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
+    grep -q -i "[[:space:]]*extra\-libraries:" ./*.cabal
+    if [ $? -eq 0 ]; then
+      cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
+      grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
+    fi
   fi
 }
 
@@ -298,8 +316,12 @@ allExtraLibrariesAux() {
 # Print out an array of possibly-needed extra-libraries.
 allExtraLibraries() {
   local LIBS=($(allExtraLibrariesAux | sed 's/,/\
-/' | uniq))
-  echo "${LIBS[@]}"
+/'))
+  if [ "${#LIBS[@]}" -gt 0 ]; then
+    printf '%s\n' "${LIBS[@]}" | sort -u | tr '\n' ' '
+  else
+    echo "${LIBS[@]}"
+  fi
 }
 
 # Let the user know they might need to prepare system dependencies.
@@ -515,7 +537,6 @@ mkCabbage() {
   local FROZENDEF
   local LINKSANDBOX
   local DEPS=($(buildplanDependencies))
-
   local DEPNAMES=($(cat buildplan | sed 's/ .*$//'))
 
   if [ $3 -gt 0 ]; then
@@ -799,12 +820,16 @@ mkCabbages() {
     for bt in "${BUILDTOOLS[@]}"; do
       cabal get "$bt"
       if ! [ $? -eq 0 ]; then
-        echo "Build tool $bt is not available from Hackage"
-      else
-        local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
-        echo "Making build-tool cabbage: $d"
-        (cd "$d" && cabal sandbox init && mkCabbages false false)
+        local ANS
+        read -p "cabal get did not unpack $bt, should we continue? [Y/n]" -n 1 -t 5 ANS
+        echo
+        if [ "$ANS" = "n" ]; then
+          exit 1
+        fi
       fi
+      local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
+      echo "Making build-tool cabbage: $d"
+      (cd "$d" && cabal sandbox init && mkCabbages false false)
     done
     popd > /dev/null
   fi
@@ -903,22 +928,6 @@ getReinstallableGlobals() {
   sed 's/  [ ]*/ /'
 }
 
-# Check /nix/store for a buildplan for this versioned
-# package. If not found, run dryDependencies, otherwise use the old
-# file. This is just used to get a list of transitive dependencies.
-freezeIfNeeded() {
-  local NAME=$(getMyFullName)
-  local d
-  for d in $(ls -d /nix/store/*-haskell-"$NAME" 2> /dev/null; ls -d /nix/store/*-haskell-"$NAME".4552 2> /dev/null); do
-    if [ -f "$d"/.cabbageCache/buildplan ]; then
-      cp "$d"/.cabbageCache/buildplan ./buildplan
-      chmod u+w buildplan
-      return 0
-    fi
-  done
-  dryDependencies > buildplan
-}
-
 # Find a build plan, then tweak the ~buildplan~ file to
 # cabbage patch references to globally installed packages. If an
 # argument is given, we do /not/ search for a cached build plan. This
@@ -927,8 +936,7 @@ freezeIfNeeded() {
 # of something else.
 freezeCabbagePatch() {
   if [ "$#" -gt 0 ]; then
-    dryDependencies > buildplan
-
+    dryDependencies "$1" > buildplan
     if [ $1 -gt 0 ]; then
       # If a globally-installed package must be upgraded, then we cabbage
       # patch the build plan to allow us to shadow globally-installed
@@ -943,7 +951,7 @@ freezeCabbagePatch() {
       fi
     fi
   else
-    freezeIfNeeded
+    dryDependencies > buildplan
   fi
 }
 
@@ -995,7 +1003,7 @@ defaultShell() {
   local TOREMOVE=()
   for t in "${TOOLS[@]}"; do
     local dirname=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
-    if [ -n "$dirname" ]; then
+    if [ -z "$dirname" ]; then
       TOREMOVE+=($t)
     elif [ "$dirname" = "" ]; then
       TOREMOVE+=($t)
