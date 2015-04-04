@@ -214,16 +214,21 @@ EOF
 #+BEGIN_SRC sh :tangle cabbage :exports code
 # Print out a .cabal file starting with a pkgconfig-depends line.
 pkgconfigDependsStarts() {
-  if cabalFileExists ; then
-    cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
-  fi
+  cat ./*.cabal | sed 's/--.*$//' | sed -n '/[[:space:]]*[Pp]kg[Cc]onfig-[Dd]epends:/,$ p'
 }
 
 # Pull all pkgconfig dependencies from a .cabal file
 pkgconfigDepends() {
-  pkgconfigDependsStarts | stanzaHead \
+  if cabalFileExists ; then
+    grep -q -i "[[:space:]]*pkgconfig\-depends:" *.cabal
+    if [ $? -eq 0 ]; then
+      pkgconfigDependsStarts | stanzaHead \
  | sed -e 's/[Pp]kg[Cc]onfig-[Dd]epends:[[:space:]]*//' -e 's/,/\
  /g' | sed 's/^[[:space:]]*//' | sed '/^$/d'
+    else
+      echo
+    fi
+  fi
 }
 #+END_SRC
 
@@ -253,9 +258,14 @@ Pick out all build-tools used by a package and all of its dependencies.
 # Print each build-tool without any version constraint.
 cabalBuildTools() {
   if cabalFileExists ; then
-    cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
+    grep -q -i "[[:space:]]*build-tools:" ./*.cabal
+    if [ $? -eq 0 ]; then
+      cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
     | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
 /g' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
+    else
+     echo
+    fi
   fi
 }
 
@@ -310,9 +320,14 @@ We can pick out frameworks requirements that are needed on OS X (darwin).
 #+NAME: cabalFrameworks
 #+BEGIN_SRC sh :exports code :tangle cabbage
 cabalFrameworks() {
-  cabalLibraryTarget \
+  if cabalFileExists ; then
+    grep -q -i "[[:space:]]*frameworks:" ./*.cabal
+    if [ $? -eq 0 ]; then
+      cabalLibraryTarget \
   | grep -i "frameworks" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
-/' | uniq
+/' | sort -u
+    fi
+  fi
 }
 #+END_SRC
 
@@ -784,8 +799,11 @@ guarded behind one of "if os(windows)", "os(solaris)", or "os(ios)".
 # library target.
 cabalExtraLibraries() {
   if cabalFileExists ; then
-    cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
-    grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
+    grep -q -i "[[:space:]]*extra\-libraries:" ./*.cabal
+    if [ $? -eq 0 ]; then
+      cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
+      grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
+    fi
   fi
 }
 
