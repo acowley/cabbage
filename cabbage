@@ -288,6 +288,13 @@ dummyCabalLibrary() {
   echo "  exposed-modules:"
 }
 
+# Builds a .cabal file that depends on every package listed in a
+# cabal.config file consisting solely of a single "constraints"
+# stanza. This is intended to work with Stackage releases.
+dummyFromConstraints() {
+  dummyCabalLibrary; sed -e 's/^constraints:/  build-depends:/' -e 's/^\(   [[:space:]]*\)\(.*\)$/\1    \2/' cabal.config
+}
+
 # Prints the extra-libraires from a cabal file iff they occur in a
 # library target.
 cabalExtraLibraries() {
@@ -1073,6 +1080,12 @@ showHelp() {
   echo ""
   echo "- The '-b' option will build the project with nix-build."
   echo ""
+  echo "- The '-l' option will build against the current Stackage LTS"
+  echo "  (see www.stackage.org for more information)"
+  echo ""
+  echo "- The '-n' option will build against the current Stackage Nightly"
+  echo "  (see www.stackage.org for more information)"
+  echo ""
   echo "- If cabbage is given a path to a .cabal file or a package name "
   echo "  (with optional version suffix) available on hackage, that package "
   echo "  will be built in a temporary directory so that it is available in "
@@ -1083,10 +1096,12 @@ showHelp() {
 
 ALLTARGETS=false
 
-while getopts ":abh" opt; do
+while getopts ":ablnh" opt; do
   case "$opt" in
     a) ALLTARGETS=true;;
     b) cabal configure && cabal sdist -v0 && nix-build shell.nix; exit 0;;
+    l) curl http://www.stackage.org/lts/cabal.config > cabal.config;;
+    n) curl http://www.stackage.org/nightly/cabal.config > cabal.config;;
     h|\?) showHelp; exit 0;;
   esac
 done
