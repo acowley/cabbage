@@ -1319,7 +1319,6 @@ mkCabbage() {
   local FROZENDEF
   local LINKSANDBOX
   local DEPS=($(buildplanDependencies))
-
   local DEPNAMES=($(cat buildplan | sed 's/ .*$//'))
 
   if [ $3 -gt 0 ]; then
@@ -1732,22 +1731,6 @@ getReinstallableGlobals() {
   sed 's/  [ ]*/ /'
 }
 
-# Check /nix/store for a buildplan for this versioned
-# package. If not found, run dryDependencies, otherwise use the old
-# file. This is just used to get a list of transitive dependencies.
-freezeIfNeeded() {
-  local NAME=$(getMyFullName)
-  local d
-  for d in $(ls -d /nix/store/*-haskell-"$NAME" 2> /dev/null; ls -d /nix/store/*-haskell-"$NAME".4552 2> /dev/null); do
-    if [ -f "$d"/.cabbageCache/buildplan ]; then
-      cp "$d"/.cabbageCache/buildplan ./buildplan
-      chmod u+w buildplan
-      return 0
-    fi
-  done
-  dryDependencies > buildplan
-}
-
 # Find a build plan, then tweak the ~buildplan~ file to
 # cabbage patch references to globally installed packages. If an
 # argument is given, we do /not/ search for a cached build plan. This
@@ -1756,8 +1739,7 @@ freezeIfNeeded() {
 # of something else.
 freezeCabbagePatch() {
   if [ "$#" -gt 0 ]; then
-    dryDependencies > buildplan
-
+    dryDependencies "$1" > buildplan
     if [ $1 -gt 0 ]; then
       # If a globally-installed package must be upgraded, then we cabbage
       # patch the build plan to allow us to shadow globally-installed
@@ -1772,7 +1754,7 @@ freezeCabbagePatch() {
       fi
     fi
   else
-    freezeIfNeeded
+    dryDependencies > buildplan
   fi
 }
 #+END_SRC
