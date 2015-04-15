@@ -2034,3 +2034,6 @@ mentions ~z~. This system dependency, ~libz~, is provided by the
 nixpkgs package, ~zlib~. It would be nice to parse these out of .cabal
 files automatically and map them to nixpkgs package names. In the
 meantime, these can be manually specified a ~cabbage.config~ file.
+** TODO Bug with c2hs
+c2hs acts as though it depends on itself causing cabbage to
+recursively generate cabbages.
