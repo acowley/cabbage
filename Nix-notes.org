@@ -1,12 +1,13 @@
 * Overview
-The idea is that every build takes place in a cabal sandbox.
+The idea is that every build takes place in a cabal
+sandbox.
 
 We ultimately want to create a derivation that has been parameterized
 by a set of constraints. We obtain the right constraints by running
 =cabal install --dependencies-only --dry-run= on the downstream
 package we are trying to build, then using that build plan to
-constraint the solver when building each upstream package. The
-=buildplan= file becomes part of the nix derivation of the upstream
+constrain the solver when building each upstream package. The
+=buildplan= file becomes part of the Nix derivation of the upstream
 package, meaning we can have multiple instances of the same version of
 a package that have been built with different dependencies.
 
