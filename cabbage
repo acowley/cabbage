@@ -15,8 +15,18 @@ cabalFileExists() {
 # Print only the library target portion of a .cabal file and filter
 # out line comments.
 isolateLibraryTarget() {
-  sed -n '/^[Ll]ibrary/,/^[^[:space:]]/ { /^[[Ll]ibrary/p; /^[[:space:]]/p; }' \
-  | sed 's/--.*$//'
+  sed -n '/^[Ll]ibrary/,/^[^[:space:]]/ { /^[Ll]ibrary/p; /^[[:space:]]/p; }'
+}
+
+# Print only the executable target portions of a .cabal file.
+isolateExecutableTarget() {
+  sed -n '/^[Ee]xecutable/,/^[^[:space:]]/ { /^[Ee]xecutable/p; /^[[:space:]]/p; }'
+}
+
+isolateLibraryAndExecutableTargets() {
+  local TMP=$(cat *.cabal | sed 's/--.*$//')
+  echo "$TMP" | isolateLibraryTarget
+  echo "$TMP" | isolateExecutableTarget
 }
 
 # Remove any Cabal block guarded by an "if os(windows)" or "if
@@ -106,7 +116,7 @@ cabalBuildTools() {
   if cabalFileExists ; then
     grep -q -i "[[:space:]]*build-tools:" ./*.cabal
     if [ $? -eq 0 ]; then
-      cat ./*.cabal | sed 's/--.*$//' | removeWindowsBlocks \
+      isolateLibraryAndExecutableTargets | removeWindowsBlocks \
     | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
 /g' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
     else
@@ -301,7 +311,7 @@ cabalExtraLibraries() {
   if cabalFileExists ; then
     grep -q -i "[[:space:]]*extra\-libraries:" ./*.cabal
     if [ $? -eq 0 ]; then
-      cat ./*.cabal | isolateLibraryTarget | removeWindowsBlocks | \
+      cat ./*.cabal | sed 's/--.*$//' | isolateLibraryTarget | removeWindowsBlocks | \
       grep -i "extra-libraries" | awk 'BEGIN { FS=":"; } { print($2); }'
     fi
   fi
