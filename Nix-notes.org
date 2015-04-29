@@ -1833,16 +1833,25 @@ let pkgs = import <nixpkgs> {};
     mynix = import <mynix>;
     haskellBuildTools = with mynix; [ ghcDefault cabalDefault ];
 $(if [ "${#TOOLS[@]}" -gt 0 ]; then
+    echo "    buildHelpers = rec {"
     local t
     for t in "${TOOLS[@]}"; do
       local buildTool=$(basename $(find .cabbages -name "$t-[[:digit:].]*" -depth 1))
-      echo "    $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
-      echo "      inherit pkgs haskellBuildTools;"
-      echo "    };"
+      local buildToolTools=($(cd .cabbages/"$buildTool" && allBuildTools))
+      buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
+      echo "      $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
+      echo "        inherit pkgs haskellBuildTools ${buildToolTools[@]};"
+      echo "      };"
     done
+    echo "    };"
   fi)
-in pkgs.callPackage ./default.nix {
-   inherit pkgs haskellBuildTools $(echo "${TOOLS[@]}");
+$(if [ "${#TOOLS[@]}" -gt 0 ]; then
+echo "in with buildHelpers; pkgs.callPackage ./default.nix {"
+echo "   inherit pkgs haskellBuildTools $(echo "${TOOLS[@]}");"
+else
+echo "in pkgs.callPackage ./default.nix {"
+echo "   inherit pkgs haskellBuildTools;"
+fi)
 }
 EOF
   echo "$NIX"
