@@ -1976,6 +1976,20 @@ directory.
 <<getCabalFile>>
 <<defaultShell>>
 
+# Get a list of all add-source dependencies, then delete and
+# re-initialize the sandbox, then re-add those sources. This flushes
+# out the sandbox, which can otherwise constrain the dependency
+# solver and leave us with an incomplete buildplan.
+regenSandbox() {
+  local DIRS=($(cabal sandbox list-sources | sed '1,/^$/ d' | sed '/^$/,$ d'))
+  cabal sandbox delete
+  cabal sandbox init
+  local d
+  for d in "${DIRS[@]}"; do
+    cabal sandbox add-source "$d"
+  done
+}
+
 showHelp() {
   echo "Usage: cabbage [-a] [-b] [packageName]"
   echo ""
@@ -2021,6 +2035,8 @@ shift $((OPTIND - 1))
 if [ "$#" -eq 0 ]; then
   if ! [ -f cabal.sandbox.config ]; then
     cabal sandbox init
+  else
+    regenSandbox
   fi
   mkCabbages $ALLTARGETS true
   if ! [ -f shell.nix ]; then
@@ -2054,6 +2070,7 @@ mentions ~z~. This system dependency, ~libz~, is provided by the
 nixpkgs package, ~zlib~. It would be nice to parse these out of .cabal
 files automatically and map them to nixpkgs package names. In the
 meantime, these can be manually specified a ~cabbage.config~ file.
-** TODO Bug with c2hs
-c2hs acts as though it depends on itself causing cabbage to
-recursively generate cabbages.
+** TODO Make dependency cabbages in parallel
+Perhaps use =getconf _NPROCESSORS_ONLN= to figure out how many jobs to
+run in parallel. It's not entirely sensible as we may not be
+bottlenecked on CPU, but it's a number.

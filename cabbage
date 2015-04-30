@@ -1084,6 +1084,20 @@ EOF
   echo "nix-env -i $CABBAGE"
 }
 
+# Get a list of all add-source dependencies, then delete and
+# re-initialize the sandbox, then re-add those sources. This flushes
+# out the sandbox, which can otherwise constrain the dependency
+# solver and leave us with an incomplete buildplan.
+regenSandbox() {
+  local DIRS=($(cabal sandbox list-sources | sed '1,/^$/ d' | sed '/^$/,$ d'))
+  cabal sandbox delete
+  cabal sandbox init
+  local d
+  for d in "${DIRS[@]}"; do
+    cabal sandbox add-source "$d"
+  done
+}
+
 showHelp() {
   echo "Usage: cabbage [-a] [-b] [packageName]"
   echo ""
@@ -1129,6 +1143,8 @@ shift $((OPTIND - 1))
 if [ "$#" -eq 0 ]; then
   if ! [ -f cabal.sandbox.config ]; then
     cabal sandbox init
+  else
+    regenSandbox
   fi
   mkCabbages $ALLTARGETS true
   if ! [ -f shell.nix ]; then
