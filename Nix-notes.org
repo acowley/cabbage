@@ -1485,6 +1485,7 @@ SETUPEOF
     \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
     echo "Building..."
     \${cabalTmp} --builddir=\$out/dist build -v0
+    \${cabalTmp} --builddir=\$out/dist haddock -v0 || true
     \${cabalTmp} --builddir=\$out/dist copy
     \${cabalTmp} --builddir=\$out/dist register
     \${cabalTmp} --builddir=\$out/dist clean || true
