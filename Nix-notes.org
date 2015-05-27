@@ -999,15 +999,6 @@ EOF
 }
 #+END_SRC
 
-#+BEGIN_SRC sh :results output :noweb yes
-<<sowFlags>>
-cd ~/temp/diagrams-lib-1.2.0.8
-cat cabbage.config | sowFlags
-#+END_SRC
-
-#+RESULTS:
-: Ignoring flag for unknown dependency: flingle
-
 * Creating a derivation for each dependency
 Our derivations are actually not that complicated from a Nix
 perspective because we aren't using much Nix machinery. Instead, we
@@ -1191,50 +1182,7 @@ getPackageDBPath() {
 }
 #+END_SRC
 
-**** A quick test
-If we are in a sandbox directory, we get the package db string. If
-not, we get an error message.
-
-#+BEGIN_SRC sh :exports none :results output :noweb yes
-<<getPackageDBPath>>
-cd CabbageDown
-RES=$(getPackageDBPath)
-if [ $? -eq 0 ]; then
-  echo "$RES"
-else
-  echo "Not in a sandbox!"
-fi
-#+END_SRC
-
-#+RESULTS:
-: x86_64-osx-ghc-7.8.4
-**** Experiments
-#+BEGIN_SRC sh :exports none
-cd CabbageDown
-cabal sandbox hc-pkg list | grep ".conf.d" | tail -n 1 | sed 's/.*\/\(.*\)-packages.conf.d.*/\1/'
-#+END_SRC
-
-#+RESULTS:
-: x86_64-osx-ghc-7.8.4
-
-#+BEGIN_SRC sh :exports none
-ghc-pkg list | grep ".conf.d" | tail -n 1 | sed 's/.*\/\(.*\)\/package.conf.d.*/\1/'
-#+END_SRC
-
-#+RESULTS:
-: x86_64-darwin-7.8.3
-
-#+BEGIN_SRC sh : exports none
-#cd CabbageDown
-cabal sandbox hc-pkg list > /dev/null
-echo $?
-#+END_SRC
-
-#+RESULTS:
-: 1
-
-
-*** Dependency Nix packages
+*** Generating Nix packages
 
 So we have a directory with a package's source code, and we have a
 =buildplan= from the downstream package. The downstream package may
@@ -1291,17 +1239,7 @@ getSynopsis() {
 }
 #+END_SRC
 
-***** Test
-#+BEGIN_SRC sh :noweb yes :results output
-<<getSynopsis>>
-cd ~/Documents/Projects/Frames 
-getSynopsis
-#+END_SRC
-
-#+RESULTS:
-: Data frames For working with tabular data files 
-
-**** The bash code
+**** Making Cabbages
 
 #+NAME: mkCabbage
 #+BEGIN_SRC sh :exports code :tangle cabbage :noweb yes
@@ -1482,7 +1420,7 @@ SETUPEOF
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
     echo "Building..."
     \${cabalTmp} --builddir=\$out/dist build -v0
     \${cabalTmp} --builddir=\$out/dist haddock -v0 || true
@@ -1579,14 +1517,33 @@ mkCabbages() {
 
   pushd .cabbages > /dev/null
   local d
+  
+  # We execute several calls to prepCabbage in parallel
+  #local numPar=$(getconf _NPROCESSORS_ONLN)
+  local numPar=1
+  local pids=()
+  local numJobs=0
   for d in "${deps[@]}"; do
     echo "Making cabbage: $d"
     if [ -f "$d"/default.nix ]; then
       echo "Using existing default.nix"
     else
-      (cd "$d" && prepCabbage "$d" "$dbPath")
+      (cd "$d" && prepCabbage "$d" "$dbPath") &
+      pids+=($!)
+      numJobs=$((numJobs + 1))
+      if [ "$numJobs" -eq "$numPar" ]; then
+        for p in ${pids[@]}; do
+          wait $p
+        done
+        pids=()
+        numJobs=0
+      fi
     fi
   done
+  for p in ${pids[@]}; do
+    wait $p
+  done
+
   popd > /dev/null
   rm bpconstraints
 

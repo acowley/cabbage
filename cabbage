@@ -721,7 +721,7 @@ SETUPEOF
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
     echo "Building..."
     \${cabalTmp} --builddir=\$out/dist build -v0
     \${cabalTmp} --builddir=\$out/dist haddock -v0 || true
@@ -818,14 +818,33 @@ mkCabbages() {
 
   pushd .cabbages > /dev/null
   local d
+  
+  # We execute several calls to prepCabbage in parallel
+  #local numPar=$(getconf _NPROCESSORS_ONLN)
+  local numPar=1
+  local pids=()
+  local numJobs=0
   for d in "${deps[@]}"; do
     echo "Making cabbage: $d"
     if [ -f "$d"/default.nix ]; then
       echo "Using existing default.nix"
     else
-      (cd "$d" && prepCabbage "$d" "$dbPath")
+      (cd "$d" && prepCabbage "$d" "$dbPath") &
+      pids+=($!)
+      numJobs=$((numJobs + 1))
+      if [ "$numJobs" -eq "$numPar" ]; then
+        for p in ${pids[@]}; do
+          wait $p
+        done
+        pids=()
+        numJobs=0
+      fi
     fi
   done
+  for p in ${pids[@]}; do
+    wait $p
+  done
+
   popd > /dev/null
   rm bpconstraints
 
