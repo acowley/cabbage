@@ -2081,5 +2081,5 @@ bottlenecked on CPU, but it's a number.
 
 This would work, but cabal uses a file system lock in the sandbox that
 gets confused when multiple jobs run simultaneously.
-** TODO Resolve build-tool to package name mapping
-A problem is that packages sometimes list a build-tool executable that is different than the name of the hackage package that provides that build tool. We can't depend on those things, of course.
+** TODO Packages with build-tool /and/ library
+=cpphs= is a trouble maker here. It gets built as a build-tool, which makes module /not/ require a =frozenCabbages= argument, but it needs to be built as a library as well, and, in that case, it /does/ need a =frozenCabbages=  argument. When we build the build tool executable from the downstream =shell.nix=, it is self-contained, but when we build the library from downstream =default.nix=, it should be linked with all the other libraries.
