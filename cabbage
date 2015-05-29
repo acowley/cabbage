@@ -118,7 +118,7 @@ cabalBuildTools() {
     if [ $? -eq 0 ]; then
       isolateLibraryAndExecutableTargets | removeWindowsBlocks \
     | grep -i "build-tools" | awk 'BEGIN { FS=":"; } { print($2); }' | sed 's/,/\
-/g' | sed -e 's/^[[:space:]]*//' -e 's/ .*$//'
+/g' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]].*$//'
     else
      echo
     fi
@@ -140,7 +140,7 @@ allBuildToolsAux() {
 # Print the array of all build-tools used to build this package and
 # all its dependencies.
 allBuildTools() {
-  local TOOLS=($(allBuildToolsAux | sort -u)) 
+  local TOOLS=($(allBuildToolsAux | sort -u))
 
   # hsc2hs comes with GHC
   local special
@@ -302,7 +302,7 @@ dummyCabalLibrary() {
 # cabal.config file consisting solely of a single "constraints"
 # stanza. This is intended to work with Stackage releases.
 dummyFromConstraints() {
-  dummyCabalLibrary; sed -e 's/^constraints:/  build-depends:/' -e 's/^\(   [[:space:]]*\)\(.*\)$/\1    \2/' cabal.config
+  dummyCabalLibrary; sed -e 's/^constraints:/  build-depends:/' -e 's/^\(   [[:space:]]*\)\(.*\)$/\1    \2/' -e 's/^.* installed,$//' cabal.config
 }
 
 # Prints the extra-libraires from a cabal file iff they occur in a
@@ -467,9 +467,9 @@ getAddSource() {
 # the array; or its index if it is.
 findIndex() {
   local i
-  declare -a arr=("${!2}")
+  local -a arr=("${!2}")
   for i in "${!arr[@]}"; do 
-    [[ "${arr[$i]}" == "$1" ]] && echo $i && return 0; done
+    [[ "${arr[$i]}" == "$1" ]] && echo "$i" && return 0; done
   echo "-1"
   return 1
 
@@ -856,17 +856,26 @@ mkCabbages() {
     local bt
     for bt in "${BUILDTOOLS[@]}"; do
       cabal get "$bt"
-      if ! [ $? -eq 0 ]; then
+      if ! [ "$?" -eq 0 ]; then
         local ANS
-        read -p "cabal get did not unpack $bt, should we continue? [Y/n]" -n 1 -t 5 ANS
+        echo
+        echo "WARNING: cabal get did not unpack $bt"
+        read -p "Should we continue? [Y/n] " -n 1 -t 5 ANS
         echo
         if [ "$ANS" = "n" ]; then
           exit 1
         fi
       fi
-      local d=$(basename $(find . -name "$bt-[[:digit:].]*" -depth 1))
-      echo "Making build-tool cabbage: $d"
-      (cd "$d" && cabal sandbox init && mkCabbages false false)
+      
+      local d=$(find . -name "$bt-[[:digit:].]*" -depth 1)
+      local dresult=$?
+      if [ "$d" = "" ]; then
+        echo "WARNING: Couldn't find build tool: $bt"
+      else
+        d=$(basename "$d")
+        echo "Making build-tool cabbage: $d"
+        (cd "$d" && cabal sandbox init && mkCabbages false false)
+      fi
     done
     popd > /dev/null
   fi
@@ -1066,12 +1075,17 @@ $(if [ "${#TOOLS[@]}" -gt 0 ]; then
     echo "    buildHelpers = rec {"
     local t
     for t in "${TOOLS[@]}"; do
-      local buildTool=$(basename $(find .cabbages -name "$t-[[:digit:].]*" -depth 1))
-      local buildToolTools=($(cd .cabbages/"$buildTool" && allBuildTools))
-      buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
-      echo "      $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
-      echo "        inherit pkgs haskellBuildTools ${buildToolTools[@]};"
-      echo "      };"
+      local buildTool=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
+      if ! [ buildTool = "" ]; then
+        buildTool=$(basename "$buildTool")
+        local buildToolTools=($(cd .cabbages/"$buildTool" && allBuildTools))
+        buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
+        echo "      $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
+        echo "        inherit pkgs haskellBuildTools ${buildToolTools[@]};"
+        echo "      };"
+      else
+        echo "WARNING: Couldn't add shell.nix dependency on $t"
+      fi
     done
     echo "    };"
   fi)
@@ -1119,13 +1133,13 @@ regenSandbox() {
 }
 
 showHelp() {
-  echo "Usage: cabbage [-a] [-b] [packageName]"
+  echo "Usage: cabbage [-a | -b | -l | -n] [packageName]"
   echo ""
   echo "- Run cabbage in a directory with a .cabal file to build Nix"
   echo "  expressions for the current package and all of its dependencies."
   echo "  Then run 'nix-shell --run 'sh $setup'' to ensure that all "
   echo "  dependencies are available in the Nix store, and to link them into "
-  echo "  the sandbox. "
+  echo "  the sandbox."
   echo "  If no sandbox is in the current directory, a new one will be created."
   echo ""
   echo "- The '-a' option will additionally link the dependencies of any "
@@ -1171,14 +1185,35 @@ if [ "$#" -eq 0 ]; then
     defaultShell > shell.nix
   fi
 else
-  mytmpdir=$(mktemp -d 2>/dev/null || mktemp -d -t 'cabbage-temp')
-  (cd "$mytmpdir" \
-      && getCabalFile "$1" \
-      && cabal sandbox init \
-      && mkCabbages $ALLTARGETS true \
-      && defaultShell > shell.nix \
-      && cabal sandbox hc-pkg recache \
-      && nix-shell --command "echo 'Done'" \
-      && getNamedCabbage "$1")
-  rm -r "$mytmpdir"
+  if [ "$1" = "stackage" ]; then
+    if ! [ -f cabal.config ]; then
+      echo "Building stackage requires a cabal.config file."
+      echo "Did you forget to use either the -l or -n flags?"
+    else
+      if [ -f stackage.cabal ] || [ -f cabal.sandbox.config ]; then
+        echo "This directory isnot empty."
+        read -p "Are you sure you want to clear it? [Y/n]" -n 1 -t 5 STACKAGE_CLEAR_SB
+        echo
+        if [ "$STACKAGE_CLEAR_SB" = "n" ]; then
+          exit 1
+        fi
+        cabal sandbox delete
+      fi
+      dummyFromConstraints > stackage.cabal
+      cabal sandbox init
+      mkCabbages false true
+      defaultShell > shell.nix
+    fi
+  else
+    mytmpdir=$(mktemp -d 2>/dev/null || mktemp -d -t 'cabbage-temp')
+    (cd "$mytmpdir" \
+        && getCabalFile "$1" \
+        && cabal sandbox init \
+        && mkCabbages $ALLTARGETS true \
+        && defaultShell > shell.nix \
+        && cabal sandbox hc-pkg recache \
+        && nix-shell --command "echo 'Done'" \
+        && getNamedCabbage "$1")
+    rm -r "$mytmpdir"
+  fi
 fi
