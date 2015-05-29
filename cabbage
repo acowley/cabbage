@@ -1076,7 +1076,7 @@ $(if [ "${#TOOLS[@]}" -gt 0 ]; then
     local t
     for t in "${TOOLS[@]}"; do
       local buildTool=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
-      if ! [ buildTool = "" ]; then
+      if ! [ "$buildTool" = "" ]; then
         buildTool=$(basename "$buildTool")
         local buildToolTools=($(cd .cabbages/"$buildTool" && allBuildTools))
         buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
@@ -1084,7 +1084,7 @@ $(if [ "${#TOOLS[@]}" -gt 0 ]; then
         echo "        inherit pkgs haskellBuildTools ${buildToolTools[@]};"
         echo "      };"
       else
-        echo "WARNING: Couldn't add shell.nix dependency on $t"
+        echo "WARNING: Couldn't add shell.nix dependency on $t" 1>&2
       fi
     done
     echo "    };"
