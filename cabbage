@@ -125,14 +125,24 @@ cabalBuildTools() {
   fi
 }
 
+# GTK's build tools package actually defines multiple build-tool
+# executables. If a Cabal package refers to the executable name, we
+# need to map that back to the Cabal package that provides that
+# executable.
+resolveBuildToolPackages() {
+  sed -e 's/gtk2hsC2hs/gtk2hs-buildtools/' \
+      -e 's/gtk2hsTypeGen/gtk2hs-buildtools/' \
+      -e 's/gtk2hsHookGenerator/gtk2hs-buildtools/'
+}
+
 allBuildToolsAux() {
-  cabalBuildTools
+  cabalBuildTools | resolveBuildToolPackages
   if [ -d .cabbages ]; then
     local DEPS=($(buildplanDependencies))
     local d
     (cd .cabbages && \
      for d in "${DEPS[@]}"; do
-       (cd "$d" &&  cabalBuildTools)
+       (cd "$d" &&  cabalBuildTools | resolveBuildToolPackages)
      done)
   fi
 }
@@ -1079,7 +1089,7 @@ $(if [ "${#TOOLS[@]}" -gt 0 ]; then
       if ! [ "$buildTool" = "" ]; then
         buildTool=$(basename "$buildTool")
         local buildToolTools=($(cd .cabbages/"$buildTool" && allBuildTools))
-        buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
+        #buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
         echo "      $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
         echo "        inherit pkgs haskellBuildTools ${buildToolTools[@]};"
         echo "      };"
