@@ -1292,13 +1292,13 @@ mkCabbage() {
     # This is /the/ downstream package or a build-tool
 
     # We will need the standard callPackage function
-    FROZENUPSTREAM="callPackage"
+    FROZENUPSTREAM="callPackage, frozenCabbages ? {}"
 
     # We will define the frozenCabbages attribute
     IFS=$'\n' read -r -d '' FROZENDEF <<EOF
-frozenCabbages = rec {
+myCabbages = lib.fix (frozenCabbages: {
 $(callCabbages DEPNAMES[@] DEPS[@])
-    };
+    });
 EOF
 
     # We will seed the sandbox /in this directory/ with our
@@ -1384,7 +1384,12 @@ stdenv.mkDerivation rec {
           else
             echo "./."
           fi);
-  cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
+$(if [ $3 -gt 0 ]; then
+  echo -n "  cabbageDeps = with myCabbages; [ "
+else
+  echo -n "  cabbageDeps = with frozenCabbages; [ "
+fi)
+$(echo "${DEPNAMES[@]}") ];
   systemDeps = (with pkgs; [ $SYSTEMDEPS ]) ++
                lib.lists.unique (lib.concatMap (lib.attrByPath ["systemDeps"] []) cabbageDeps);
   propagatedBuildInputs = systemDeps;$NIXLD
@@ -2081,5 +2086,3 @@ bottlenecked on CPU, but it's a number.
 
 This would work, but cabal uses a file system lock in the sandbox that
 gets confused when multiple jobs run simultaneously.
-** TODO Packages with build-tool /and/ library
-=cpphs= is a trouble maker here. It gets built as a build-tool, which makes module /not/ require a =frozenCabbages= argument, but it needs to be built as a library as well, and, in that case, it /does/ need a =frozenCabbages=  argument. When we build the build tool executable from the downstream =shell.nix=, it is self-contained, but when we build the library from downstream =default.nix=, it should be linked with all the other libraries.

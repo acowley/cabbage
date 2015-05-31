@@ -570,13 +570,13 @@ mkCabbage() {
     # This is /the/ downstream package or a build-tool
 
     # We will need the standard callPackage function
-    FROZENUPSTREAM="callPackage"
+    FROZENUPSTREAM="callPackage, frozenCabbages ? {}"
 
     # We will define the frozenCabbages attribute
     IFS=$'\n' read -r -d '' FROZENDEF <<EOF
-frozenCabbages = rec {
+myCabbages = lib.fix (frozenCabbages: {
 $(callCabbages DEPNAMES[@] DEPS[@])
-    };
+    });
 EOF
 
     # We will seed the sandbox /in this directory/ with our
@@ -662,7 +662,12 @@ stdenv.mkDerivation rec {
           else
             echo "./."
           fi);
-  cabbageDeps = with frozenCabbages; [ $(echo "${DEPNAMES[@]}") ];
+$(if [ $3 -gt 0 ]; then
+  echo -n "  cabbageDeps = with myCabbages; [ "
+else
+  echo -n "  cabbageDeps = with frozenCabbages; [ "
+fi)
+$(echo "${DEPNAMES[@]}") ];
   systemDeps = (with pkgs; [ $SYSTEMDEPS ]) ++
                lib.lists.unique (lib.concatMap (lib.attrByPath ["systemDeps"] []) cabbageDeps);
   propagatedBuildInputs = systemDeps;$NIXLD
