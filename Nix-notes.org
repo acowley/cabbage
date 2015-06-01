@@ -117,6 +117,33 @@ give you a ~nix-env -i~ invocation that points to where ~pandoc~ has
 been built in your Nix store so that it gets linked into your
 environment.
 
+** Building Stackage
+
+*** Building What We Can
+To build the current Stackage Nightly package set, create an empty directory and
+run, =cabbage -n stackage=. The =-n= specifies the Stackage Nightly constraint,
+while the name =stackage= is treated specially to create a dummy package based
+on the constraints given by a =cabal.config= file.
+
+Once this has finished, you can have Nix build all the dependencies by issuing,
+=nix-shell shell.nix --keep-going=. Missing system dependencies are likely to
+cause some packages to fail, so we build as much as we can.
+
+Now you can create a Nix binary cache. This is slightly complicated by the fact
+that we may not have succeeded in building all the dependences. To deal with
+this, we can find all the derivations that are direct dependencies of our
+Stackage derivation (this will include derivations for packages that failed to
+build), and then test whether or not the output paths of each of those
+derivations actually exist.
+
+*** Pushing to the Cache
+
+#+BEGIN_SRC sh
+nix-store -q --references $(nix-instantiate shell.nix) | grep '\.drv' | awk '{print "nix-instantiate --eval --expr '\''(import " $0 ").outPath'\''"}' | bash | awk '{print "[ -d " $0 " ] && $(nix-store -r " $0 " &>/dev/null) && echo " $0}' | bash | xargs nix-push --dest bcache
+#+END_SRC
+
+where =bcache= is the directory in which you'd like to create the binary cache.
+
 * Shebang
 Put a shebang line at the top of our tangled program.
 #+BEGIN_SRC sh :tangle cabbage :shebang "#!/usr/bin/env bash" :padline no
