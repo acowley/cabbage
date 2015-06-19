@@ -671,24 +671,6 @@ getAddedSources() {
 }
 #+END_SRC
 
-*** Quick test
-#+BEGIN_SRC sh :result output :exports none :noweb yes
-<<getAddedSources>>
-IFS='' read -r -d '' LISTED <<'EOF'
-Source dependencies registered in the current sandbox
-('/Users/acowley/Documents/Projects/Nix/CabbageDown/.cabal-sandbox'):
-
-/Users/acowley/Documents/Projects/Nix/TestCabbage
-
-To unregister source dependencies, use the 'sandbox delete-source' command.
-EOF
-
-echo "$LISTED" | getAddedSources
-#+END_SRC
-
-#+RESULTS:
-: /Users/acowley/Documents/Projects/Nix/TestCabbage
-
 ** Dependencies on hackage
 This is just =cabal get=. We then need to =cabal configure= and
 =dryDependencies= so that we can do the =buildplan= intersection
@@ -898,7 +880,7 @@ warnExtraLibraries() {
     echo "section in a cabbage.config file."
     echo
     echo "Potentially necessary extra-libraries: ${LIBS[@]}"
-    read -p "Press any key to continue..." -n 1 -t 5
+    # read -p "Press any key to continue..." -n 1 -t 5
     echo
   fi
 }
@@ -1159,6 +1141,7 @@ getDependencySources() {
   for i in "${!ADDEDSOURCEDIRS[@]}"; do
     ADDEDSOURCEPACKAGES[$i]=$(getAddedPackageName "${ADDEDSOURCEDIRS[$i]}")
   done
+
   local DEPS=($(buildplanDependencies))
   mkdir -p .cabbages
   local d
@@ -1174,6 +1157,29 @@ getDependencySources() {
       cabbagePatch "$d"
     else
       echo "Getting dependency: $d"
+      cabal get "$d" -d .cabbages
+    fi
+  done
+
+  # add-sourced build-tools are handled carefully We first strip off
+  # the version numbers of the add-sourced packages because
+  # build-tools are not usually specified with versions. We then
+  # perform similar logic to how we get library dependencies.
+
+  local BUILDTOOLS=($(allBuildTools))
+  for i in "${!ADDEDSOURCEPACKAGES[@]}"; do
+    ADDEDSOURCEPACKAGES[$i]=$(unversionPackageName "${ADDEDSOURCEPACKAGES[$i]}")
+  done
+
+  for d in "${BUILDTOOLS[@]}"; do
+    i=$(findIndex "$d" ADDEDSOURCEPACKAGES[@])
+    if [ "$i" -gt "-1" ]; then
+      echo "Getting add-source build-tool: $d"
+      getAddSource "${ADDEDSOURCEDIRS[$i]}"
+    elif [ -d .cabbages/"$d" ]; then
+      echo "Using existing source dist of $d"
+    else
+      echo "Getting build-tool: $d"
       cabal get "$d" -d .cabbages
     fi
   done
@@ -1597,17 +1603,17 @@ mkCabbages() {
     pushd .cabbages > /dev/null
     local bt
     for bt in "${BUILDTOOLS[@]}"; do
-      cabal get "$bt"
-      if ! [ "$?" -eq 0 ]; then
-        local ANS
-        echo
-        echo "WARNING: cabal get did not unpack $bt"
-        read -p "Should we continue? [Y/n] " -n 1 -t 5 ANS
-        echo
-        if [ "$ANS" = "n" ]; then
-          exit 1
-        fi
-      fi
+      # cabal get "$bt"
+      # if ! [ "$?" -eq 0 ]; then
+      #   local ANS
+      #   echo
+      #   echo "WARNING: cabal get did not unpack $bt"
+      #   read -p "Should we continue? [Y/n] " -n 1 -t 5 ANS
+      #   echo
+      #   if [ "$ANS" = "n" ]; then
+      #     exit 1
+      #   fi
+      # fi
       
       local d=$(find . -name "$bt-[[:digit:].]*" -depth 1)
       local dresult=$?
