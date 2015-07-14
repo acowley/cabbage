@@ -331,7 +331,7 @@ allBuildToolsAux() {
 
 # Print the array of all build-tools used to build this package and
 # all its dependencies.
-allBuildTools() {
+allBuildTools1() {
   local TOOLS=($(allBuildToolsAux | sort -u))
 
   # hsc2hs comes with GHC
@@ -342,7 +342,28 @@ allBuildTools() {
       unset TOOLS[$i]
     fi
   done
+
   echo "${TOOLS[@]}"
+}
+
+# Print the array of all build-tools used to build this package, all
+# its dependencies, and the build-tools needed to build those
+# build-tools.
+allBuildTools() {
+  local TOOLS=($(allBuildTools1))
+
+  local t
+  local TOOLS2=()
+  if [ -d .cabbages ]; then
+    for t in "${TOOLS[@]}"; do
+      local latest=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1 | tail -n 1)
+      TOOLS2+=($(cd "$latest" && allBuildTools1))
+    done
+  fi
+
+  (for t in "${TOOLS[@]}"; do
+    printf "%s " "$t"
+   done; echo "${TOOLS2[@]}" | sort -u)
 }
 #+END_SRC
 
@@ -354,14 +375,16 @@ allBuildTools() {
 <<allBuildTools>>
 <<dryDependencies>>
 #cd ~/temp/rifactor
-cd ~/temp/OpenCL-1.0.3.4
+#cd ~/temp/OpenCL-1.0.3.4
+cd ../HoclDemo
 #cd ../Frames
 #cd ../Hocl-OpenCL
 allBuildTools
 #+END_SRC
 
 #+RESULTS:
-: 
+: c2hs alex happy
+
 
 ** Frameworks
 We can pick out frameworks requirements that are needed on OS X (darwin).
@@ -1845,9 +1868,11 @@ defaultShell() {
   fi
   local NIX
   IFS=$'\n' read -r -d '' NIX <<EOF
+{ compiler ? "ghc" }:
 let pkgs = import <nixpkgs> {};
     mynix = import <mynix>;
-    haskellBuildTools = with mynix; [ ghcDefault cabalDefault ];
+    haskellBuildTools = [ mynix.ghcDefault
+                          mynix.cabalDefault ];
 $(if [ "${#TOOLS[@]}" -gt 0 ]; then
     echo "    buildHelpers = rec {"
     local t
