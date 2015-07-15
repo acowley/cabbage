@@ -361,9 +361,12 @@ allBuildTools() {
     done
   fi
 
-  (for t in "${TOOLS[@]}"; do
-    printf "%s " "$t"
-   done; echo "${TOOLS2[@]}" | sort -u)
+  ((for t in "${TOOLS[@]}"; do
+     printf "%s\n" "$t"
+   done;
+   for t in "${TOOLS2[@]}"; do
+     printf "%s\n" "$t"
+   done) | sort -u)
 }
 #+END_SRC
 
@@ -376,14 +379,17 @@ allBuildTools() {
 <<dryDependencies>>
 #cd ~/temp/rifactor
 #cd ~/temp/OpenCL-1.0.3.4
-cd ../HoclDemo
+cd ../Hocl-Render
 #cd ../Frames
 #cd ../Hocl-OpenCL
 allBuildTools
 #+END_SRC
 
 #+RESULTS:
-: c2hs alex happy
+: alex
+: c2hs
+: cpphs
+: happy
 
 
 ** Frameworks
