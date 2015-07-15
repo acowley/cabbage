@@ -1653,7 +1653,7 @@ mkCabbages() {
       else
         d=$(basename "$d")
         echo "Making build-tool cabbage: $d"
-        (cd "$d" && cabal sandbox init && mkCabbages false false)
+        (cd "$d" && cabal sandbox init && mkCabbages false false && cabal sandbox delete)
       fi
     done
     popd > /dev/null
