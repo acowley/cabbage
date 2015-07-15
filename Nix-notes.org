@@ -1433,10 +1433,12 @@ let cabalTmp = "cabal --config-file=./.cabal/config";
                      pkgPath = ".cabal-sandbox/$1-packages.conf.d";
                  in ''ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
                     '';
-$(if [ $3 -gt 0 ]; then
+$(if [ $3 -eq 1 ]; then
     echo "    mkSetupCmd = pkg: let nm = lib.strings.removePrefix \"haskell-\" pkg.name;"
     echo "                          p = pkg.outPath;"
     echo "                      in \"$LINKSANDBOX\";"
+  elif [ $3 -eq 2 ]; then
+    echo "    mkSetupCmd = pkg: \"\";"
   fi)
 in
 stdenv.mkDerivation rec {
