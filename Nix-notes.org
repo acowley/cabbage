@@ -1856,7 +1856,7 @@ defaultShell() {
   local t
   local TOREMOVE=()
   for t in "${TOOLS[@]}"; do
-    local dirname=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
+    local dirname=$(find .cabbages -name "$t-[[:digit:].]*" -maxdepth 3 -type d)
     if [ -z "$dirname" ]; then
       TOREMOVE+=($t)
     elif [ "$dirname" = "" ]; then
@@ -1885,12 +1885,12 @@ $(if [ "${#TOOLS[@]}" -gt 0 ]; then
     echo "    buildHelpers = rec {"
     local t
     for t in "${TOOLS[@]}"; do
-      local buildTool=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
+      local buildTool=$(find .cabbages -name "$t-[[:digit:].]*" -maxdepth 3 -type d | awk '{print length($0) " " $0;}' | sort -n | cut -d ' ' -f 2- | head -n 1)
       if ! [ "$buildTool" = "" ]; then
-        buildTool=$(basename "$buildTool")
-        local buildToolTools=($(cd .cabbages/"$buildTool" && allBuildTools))
+        #buildTool=$(basename "$buildTool")
+        local buildToolTools=($(cd "$buildTool" && allBuildTools))
         #buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
-        echo "      $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
+        echo "      $t = pkgs.callPackage $buildTool/default.nix {"
         echo "        inherit pkgs haskellBuildTools ${buildToolTools[@]};"
         echo "      };"
       else

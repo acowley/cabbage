@@ -179,9 +179,12 @@ allBuildTools() {
     done
   fi
 
-  (for t in "${TOOLS[@]}"; do
-    printf "%s " "$t"
-   done; echo "${TOOLS2[@]}" | sort -u)
+  ((for t in "${TOOLS[@]}"; do
+     printf "%s\n" "$t"
+   done;
+   for t in "${TOOLS2[@]}"; do
+     printf "%s\n" "$t"
+   done) | sort -u)
 }
 
 cabalFrameworks() {
@@ -694,10 +697,12 @@ let cabalTmp = "cabal --config-file=./.cabal/config";
                      pkgPath = ".cabal-sandbox/$1-packages.conf.d";
                  in ''ln -sFf \${p}/\${pkgPath}/*.conf \$out/\${pkgPath}/
                     '';
-$(if [ $3 -gt 0 ]; then
+$(if [ $3 -eq 1 ]; then
     echo "    mkSetupCmd = pkg: let nm = lib.strings.removePrefix \"haskell-\" pkg.name;"
     echo "                          p = pkg.outPath;"
     echo "                      in \"$LINKSANDBOX\";"
+  elif [ $3 -eq 2 ]; then
+    echo "    mkSetupCmd = pkg: \"\";"
   fi)
 in
 stdenv.mkDerivation rec {
@@ -934,7 +939,7 @@ mkCabbages() {
       else
         d=$(basename "$d")
         echo "Making build-tool cabbage: $d"
-        (cd "$d" && cabal sandbox init && mkCabbages false false)
+        (cd "$d" && cabal sandbox init && mkCabbages false false && cabal sandbox delete)
       fi
     done
     popd > /dev/null
@@ -1108,7 +1113,7 @@ defaultShell() {
   local t
   local TOREMOVE=()
   for t in "${TOOLS[@]}"; do
-    local dirname=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
+    local dirname=$(find .cabbages -name "$t-[[:digit:].]*" -maxdepth 3 -type d)
     if [ -z "$dirname" ]; then
       TOREMOVE+=($t)
     elif [ "$dirname" = "" ]; then
@@ -1137,12 +1142,12 @@ $(if [ "${#TOOLS[@]}" -gt 0 ]; then
     echo "    buildHelpers = rec {"
     local t
     for t in "${TOOLS[@]}"; do
-      local buildTool=$(find .cabbages -name "$t-[[:digit:].]*" -depth 1)
+      local buildTool=$(find .cabbages -name "$t-[[:digit:].]*" -maxdepth 3 -type d | awk '{print length($0) " " $0;}' | sort -n | cut -d ' ' -f 2- | head -n 1)
       if ! [ "$buildTool" = "" ]; then
-        buildTool=$(basename "$buildTool")
-        local buildToolTools=($(cd .cabbages/"$buildTool" && allBuildTools))
+        #buildTool=$(basename "$buildTool")
+        local buildToolTools=($(cd "$buildTool" && allBuildTools))
         #buildToolTools=(${buildToolTools[@]/#/buildHelpers.})
-        echo "      $t = pkgs.callPackage .cabbages/$buildTool/default.nix {"
+        echo "      $t = pkgs.callPackage $buildTool/default.nix {"
         echo "        inherit pkgs haskellBuildTools ${buildToolTools[@]};"
         echo "      };"
       else
