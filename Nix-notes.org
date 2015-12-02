@@ -1411,16 +1411,9 @@ EOF
 
   local FRAMEWORKS=($(cabalFrameworks))
   local NIXLD
+  SYSTEMDEPS="[ $SYSTEMDEPS ]"
   if [ "${#FRAMEWORKS[@]}" -gt 0 ]; then
-    local fw
-    NIXLD="\
-  NIX_LDFLAGS = lib.optionalString stdenv.isDarwin \""
-    for fw in "${FRAMEWORKS[@]}"; do
-      NIXLD="$NIXLD -framework $fw"
-    done
-    NIXLD="$NIXLD\";"
-  else
-    NIXLD=""
+    SYSTEMDEPS="($SYSTEMDEPS ++ lib.optionals stdenv.isDarwin (with darwin.apple_sdk.frameworks; [ $FRAMEWORKS ]))"
   fi
 
   # Now we build up the Nix expression
@@ -1454,9 +1447,9 @@ else
   echo -n "  cabbageDeps = with frozenCabbages; [ "
 fi)
 $(echo "${DEPNAMES[@]}") ];
-  systemDeps = (with pkgs; [ $SYSTEMDEPS ]) ++
+  systemDeps = (with pkgs;  $SYSTEMDEPS) ++
                lib.lists.unique (lib.concatMap (lib.attrByPath ["systemDeps"] []) cabbageDeps);
-  propagatedBuildInputs = systemDeps;$NIXLD
+  propagatedBuildInputs = systemDeps;
   buildInputs = [ stdenv.cc $(echo "${TOOLS[@]}")] ++ haskellBuildTools ++ cabbageDeps ++ systemDeps;
 
   # Build the commands to merge package databases
@@ -1500,7 +1493,7 @@ SETUPEOF
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure -p
     echo "Building..."
     \${cabalTmp} --builddir=\$out/dist build -v0
     \${cabalTmp} --builddir=\$out/dist haddock -v0 || true
