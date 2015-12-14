@@ -674,10 +674,27 @@ EOF
   fi
 
   local FRAMEWORKS=($(cabalFrameworks))
-  local NIXLD
+  local NIXFW=""
   SYSTEMDEPS="[ $SYSTEMDEPS ]"
   if [ "${#FRAMEWORKS[@]}" -gt 0 ]; then
+    # We need to replace uses of CoreFoundation with darwin.cf-private
+    # and ensure that it is at the start of the framework search path
+    # since it overlaps with another nixpkgs CoreFoundation framework.
+    echo "${FRAMEWORKS[@]}" | grep -q CoreFoundation
+    if [ $? -eq 0 ]; then
+      FRAMEWORKS=($(echo "${FRAMEWORKS[@]}" | sed 's/CoreFoundation[[:space:]]*//'))
+      FRAMEWORKS=("darwin.cf-private ${FRAMEWORKS[@]}")
+    fi
+    
+    # Hack to pull in the Kernel framework.
+    # Needed by some uses of IOKit, for example.
+    FRAMEWORKS=("${FRAMEWORKS[@]} Kernel")
+
     SYSTEMDEPS="($SYSTEMDEPS ++ lib.optionals stdenv.isDarwin (with darwin.apple_sdk.frameworks; [ ${FRAMEWORKS[@]} ]))"
+    local fw
+    for fw in "${FRAMEWORKS[@]}"; do
+     NIXFW="$NIXFW -framework $fw"
+    done
   fi
 
   # Now we build up the Nix expression
@@ -779,9 +796,13 @@ SETUPEOF
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure -p
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC  configure -p
     echo "Building..."
-    \${cabalTmp} --builddir=\$out/dist build -v0
+
+    # Ensure framework dependencies are used by GHC as they are needed
+    # when GHC invokes a C compiler.
+    COPTS=\$(echo "\$NIX_CFLAGS_COMPILE" | awk -e '{ for(i=1; i<=NF; i++) { if (match(\$(i), /^-F/)) printf("-optc %s ", \$(i)); }}')
+    \${cabalTmp} --builddir=\$out/dist build -v0 --ghc-options="\$COPTS"
     \${cabalTmp} --builddir=\$out/dist haddock -v0 || true
     \${cabalTmp} --builddir=\$out/dist copy
     \${cabalTmp} --builddir=\$out/dist register
