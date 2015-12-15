@@ -2093,8 +2093,8 @@ while getopts ":ablnh" opt; do
   case "$opt" in
     a) ALLTARGETS=true;;
     b) cabal configure && cabal sdist -v0 && nix-build shell.nix; exit 0;;
-    l) curl http://www.stackage.org/lts/cabal.config > cabal.config;;
-    n) curl http://www.stackage.org/nightly/cabal.config > cabal.config;;
+    l) curl -L http://www.stackage.org/lts/cabal.config > cabal.config;;
+    n) curl -L http://www.stackage.org/nightly/cabal.config > cabal.config;;
     h|\?) showHelp; exit 0;;
   esac
 done
