@@ -1510,7 +1510,7 @@ SETUPEOF
     eval "\$cmds"
     \${cabalTmp} sandbox hc-pkg recache
 
-    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC  configure -p
+    \${cabalTmp} --builddir=\$out/dist --bindir=\$out/bin --libexecdir=\$out/libexec --libdir=\$out/.cabal-sandbox/lib --with-gcc=\$CC configure -p \$(echo \$NIX_LDFLAGS | awk -e '{ for(i=1;i <= NF; i++) { if(match(\$(i), /^-L/)) printf("--extra-lib-dirs=%s ", substr(\$(i),3)); } }')
     echo "Building..."
 
     # Ensure framework dependencies are used by GHC as they are needed
